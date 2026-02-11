@@ -287,10 +287,10 @@ const App: React.FC = () => {
   }, [diffTree]);
 
   return (
-    <div className="min-h-screen font-sans text-zinc-900 bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] flex flex-col">
+    <div className="h-screen font-sans text-zinc-900 bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] flex flex-col overflow-hidden">
       
       {/* --- HEADER --- */}
-      <header className="bg-paper border-b-2 border-border p-4 sticky top-0 z-50 shadow-hard-sm">
+      <header className="bg-paper border-b-2 border-border p-4 shrink-0 z-50 shadow-hard-sm">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row gap-4 items-center justify-between">
             <div className="flex items-center gap-3">
                <div className="bg-black text-white p-2">
@@ -339,19 +339,17 @@ const App: React.FC = () => {
       </header>
 
       {/* --- MAIN CONTENT --- */}
-      {/* Used flex-col on mobile, flex-row on large screens. Added ref for resizing calc. */}
       <main 
          ref={containerRef}
-         className="flex-1 max-w-7xl mx-auto w-full p-4 md:p-6 flex flex-col lg:flex-row gap-6 lg:gap-0 h-[calc(100vh-80px)] overflow-hidden"
+         className="flex-1 w-full max-w-7xl mx-auto p-4 md:p-6 flex flex-col lg:flex-row gap-6 lg:gap-0 overflow-hidden min-h-0"
       >
          
          {/* LEFT PANE: EDITOR */}
-         {/* On desktop, width is controlled by style. On mobile, w-full. */}
          <div 
-            className="flex flex-col h-full min-h-[500px] w-full lg:w-[var(--left-width)] shrink-0 transition-[width] duration-0 ease-linear"
+            className="flex flex-col h-full w-full lg:w-[var(--left-width)] shrink-0 transition-[width] duration-0 ease-linear min-h-0"
             style={{ '--left-width': `${leftPanelWidth}%` } as React.CSSProperties}
          >
-            <div className="flex justify-between items-end mb-2">
+            <div className="flex justify-between items-end mb-2 shrink-0">
                <div className="flex items-center gap-2">
                   <h2 className="font-bold text-lg">Editor</h2>
                   {isInitialized && <span className="text-xs font-mono text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded">MODIFIED VERSION</span>}
@@ -374,7 +372,7 @@ const App: React.FC = () => {
                </div>
             </div>
 
-            <Card className="flex-1 bg-white relative">
+            <Card className="flex-1 bg-white relative min-h-0">
                {/* Formatting Toolbar (Only for Text Mode) */}
                {editorView === 'text' && (
                   <div className="absolute top-4 right-6 z-10">
@@ -397,11 +395,11 @@ const App: React.FC = () => {
                   </div>
                )}
                
-               <div className="h-full overflow-hidden">
+               <div className="absolute inset-0 overflow-hidden">
                    {editorView === 'text' ? (
                        <textarea 
                           ref={textareaRef}
-                          className="w-full h-full p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed bg-white text-black"
+                          className="w-full h-full p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed bg-white text-black block"
                           value={currentText}
                           onChange={(e) => handleTextChange(e.target.value)}
                           onKeyDown={handleKeyDown}
@@ -410,7 +408,7 @@ const App: React.FC = () => {
                           spellCheck={false}
                        />
                    ) : (
-                       <div className="h-full overflow-auto p-4 bg-white">
+                       <div className="absolute inset-0 overflow-auto p-4 bg-white">
                           <JsonNavProvider>
                             {currentJson ? (
                                <JsonEditor 
@@ -443,8 +441,8 @@ const App: React.FC = () => {
          </div>
 
          {/* RIGHT PANE: DIFF VIEWER */}
-         <div className="flex-1 flex flex-col h-full min-h-[500px] w-full min-w-0">
-             <div className="flex justify-between items-end mb-2">
+         <div className="flex-1 flex flex-col h-full w-full min-w-0 min-h-0">
+             <div className="flex justify-between items-end mb-2 shrink-0">
                 <div className="flex items-center gap-2">
                    <h2 className="font-bold text-lg flex items-center gap-2">
                       <ArrowLeftRight className="text-emerald-600" /> Diff
@@ -457,4 +455,44 @@ const App: React.FC = () => {
                     <div className="flex gap-2">
                         <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100">+{stats.added}</span>
                         <span className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded border border-rose-100">-{stats.removed}</span>
-                        <span className="text-xs font-bold text-
+                        <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100">~{stats.modified}</span>
+                    </div>
+                )}
+             </div>
+
+             <Card className="flex-1 bg-zinc-50/50 min-h-0">
+                 <div className="absolute inset-0 overflow-auto p-4">
+                    {isInitialized && baseJson ? (
+                        diffTree ? (
+                           <JsonTree 
+                              key={`diff-${expandAllKey}`} 
+                              data={diffTree} 
+                              isRoot={true} 
+                              defaultOpen={defaultOpen} 
+                           />
+                        ) : (
+                           <div className="flex flex-col items-center justify-center h-full text-zinc-400">
+                              <p>No structural changes detected.</p>
+                           </div>
+                        )
+                    ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-zinc-400 opacity-60 text-center px-8">
+                             <div className="border-2 border-dashed border-zinc-300 p-6 rounded-lg mb-4">
+                                <FileText size={48} className="text-zinc-300" />
+                             </div>
+                             <p className="font-bold text-zinc-600">No Original Version Set</p>
+                             <p className="text-sm mt-2 max-w-xs">
+                               Load a file or click "Start Diffing" to lock the current JSON as the original version.
+                             </p>
+                        </div>
+                    )}
+                 </div>
+             </Card>
+         </div>
+
+      </main>
+    </div>
+  );
+};
+
+export default App;
