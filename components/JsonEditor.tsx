@@ -96,8 +96,8 @@ const getInitialValue = (type: string) => {
 
 const TypeSelector = ({ onSelect, onCancel }: { onSelect: (t: string) => void, onCancel: () => void }) => (
   <div className="flex items-center gap-0.5 bg-white border border-zinc-900 rounded shadow-hard-sm absolute z-20 left-0 -top-8 p-1 animate-in fade-in zoom-in-95 duration-100 origin-bottom-left">
-      <button onClick={() => onSelect('object')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-zinc-900 border border-zinc-200 rounded-sm transition-colors" title="Object">{`{ }`}</button>
-      <button onClick={() => onSelect('array')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-zinc-900 border border-zinc-200 rounded-sm transition-colors" title="Array">{`[ ]`}</button>
+      <button onClick={() => onSelect('object')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-zinc-900 border border-zinc-200 rounded-sm transition-colors" title="Object">Dict</button>
+      <button onClick={() => onSelect('array')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-zinc-900 border border-zinc-200 rounded-sm transition-colors" title="Array">List</button>
       <button onClick={() => onSelect('string')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-emerald-700 border border-zinc-200 rounded-sm transition-colors" title="String">Str</button>
       <button onClick={() => onSelect('number')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-orange-600 border border-zinc-200 rounded-sm transition-colors" title="Number">123</button>
       <button onClick={() => onSelect('boolean')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-blue-600 border border-zinc-200 rounded-sm transition-colors" title="Boolean">T/F</button>

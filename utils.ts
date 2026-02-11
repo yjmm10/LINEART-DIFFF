@@ -102,7 +102,13 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
   if (oldType === 'object') {
     const oldObj = oldData as Record<string, any>;
     const newObj = newData as Record<string, any>;
-    const keys = Array.from(new Set([...Object.keys(oldObj), ...Object.keys(newObj)]));
+    
+    // PRESERVE ORDER: Use keys from newObj (the modified version) first
+    const newKeys = Object.keys(newObj);
+    // Then append keys that were ONLY in oldObj (the removed ones)
+    const removedKeys = Object.keys(oldObj).filter(k => !newObj.hasOwnProperty(k));
+    
+    const keys = [...newKeys, ...removedKeys];
     const children: DiffNode[] = [];
 
     keys.forEach(key => {
@@ -118,7 +124,8 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
       }
     });
 
-    children.sort((a, b) => a.key.localeCompare(b.key));
+    // DO NOT SORT ALPHABETICALLY - Keep logic order
+    // children.sort((a, b) => a.key.localeCompare(b.key));
 
     const isModified = children.some(c => c.type !== DiffType.UNCHANGED);
 
@@ -184,6 +191,7 @@ const convertRawToNodeTree = (data: any, parentType: DiffType): DiffNode[] => {
         }));
     }
 
+    // Preserve object key order here as well, DO NOT sort
     return Object.keys(data).map(key => ({
         key,
         value: parentType === DiffType.ADDED ? data[key] : undefined,
@@ -192,5 +200,5 @@ const convertRawToNodeTree = (data: any, parentType: DiffType): DiffNode[] => {
         isObject: typeof data[key] === 'object' && data[key] !== null && !Array.isArray(data[key]),
         isArray: Array.isArray(data[key]),
         children: typeof data[key] === 'object' ? convertRawToNodeTree(data[key], parentType) : undefined
-    })).sort((a, b) => a.key.localeCompare(b.key));
+    }));
 }
