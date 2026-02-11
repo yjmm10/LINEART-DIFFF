@@ -51,6 +51,7 @@ interface JsonEditorProps {
   defaultOpen?: boolean;
   path?: string; 
   index?: number;
+  onFocusPath?: (path: string) => void; // Added Prop
 }
 
 const getDataType = (data: any): 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null' => {
@@ -92,7 +93,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   isRoot = false,
   defaultOpen = true,
   path,
-  index
+  index,
+  onFocusPath
 }) => {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const type = getDataType(data);
@@ -126,6 +128,11 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   useEffect(() => { if(fieldKey !== undefined) setLocalKey(fieldKey); }, [fieldKey]);
 
   // --- Handlers ---
+  
+  const handleFocus = (e: React.FocusEvent | React.MouseEvent) => {
+      e.stopPropagation();
+      if (onFocusPath) onFocusPath(currentPath);
+  }
 
   const handleKeyBlur = () => {
     if (onKeyChange && localKey !== fieldKey) onKeyChange(localKey);
@@ -388,6 +395,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onDoubleClick={handleSyncJump}
+        onClick={handleFocus}
     >
       {/* Drop Zone Indicators */}
       {dropState === 'before' && <div className="absolute -top-[2px] left-0 right-0 h-[4px] bg-accent rounded-full z-10 pointer-events-none" />}
@@ -513,6 +521,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                   onDelete={() => handleDeleteChild(idx)}
                   defaultOpen={defaultOpen}
                   path={`${currentPath}/${idx}`}
+                  onFocusPath={onFocusPath}
                 />
              ))
           ) : (
@@ -527,6 +536,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                  onDelete={() => handleDeleteChild(key)}
                  defaultOpen={defaultOpen}
                  path={`${currentPath}/${key}`}
+                 onFocusPath={onFocusPath}
                />
             ))
           )}

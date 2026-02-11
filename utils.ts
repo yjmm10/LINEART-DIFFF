@@ -209,3 +209,187 @@ const convertRawToNodeTree = (data: any, parentType: DiffType): DiffNode[] => {
         children: typeof data[key] === 'object' ? convertRawToNodeTree(data[key], parentType) : undefined
     }));
 }
+
+
+/**
+ * JSON AST Helper: Finds the JSON path corresponding to a character index in the string.
+ */
+export const getPathFromIndex = (json: string, targetIndex: number): string => {
+    if (targetIndex < 0 || targetIndex >= json.length) return '#';
+    
+    let path: string[] = []; // Stack of keys/indices
+    let stack: { type: 'object' | 'array', index: number, key: string | null }[] = [];
+    
+    let i = 0;
+    while (i < json.length) {
+        if (i >= targetIndex && stack.length === 0) return '#'; // At root or whitespace
+        if (i >= targetIndex) {
+            // Reconstruct path
+            let res = '#';
+            for(let k=0; k<stack.length; k++) {
+                const s = stack[k];
+                if (s.type === 'array') {
+                   res += `/${s.index}`;
+                } else {
+                   if (s.key !== null) res += `/${s.key}`;
+                }
+            }
+            return res;
+        }
+
+        const char = json[i];
+
+        // Skip Strings completely
+        if (char === '"') {
+            const start = i;
+            i++;
+            while (i < json.length) {
+                if (json[i] === '"' && json[i-1] !== '\\') break;
+                i++;
+            }
+            // If inside object and expecting key, set key
+            if (stack.length > 0) {
+                const top = stack[stack.length - 1];
+                if (top.type === 'object' && top.key === null) {
+                    // This was a key
+                    // We need to verify if the target index was inside this key string?
+                    // But simplified: we just record the key name.
+                    const key = json.substring(start + 1, i);
+                    top.key = key;
+                }
+            }
+        } 
+        // Structure
+        else if (char === '{') {
+            stack.push({ type: 'object', index: 0, key: null });
+        }
+        else if (char === '[') {
+            stack.push({ type: 'array', index: 0, key: null });
+        }
+        else if (char === '}') {
+            stack.pop();
+        }
+        else if (char === ']') {
+            stack.pop();
+        }
+        else if (char === ',') {
+            if (stack.length > 0) {
+                const top = stack[stack.length - 1];
+                if (top.type === 'array') {
+                    top.index++;
+                } else {
+                    top.key = null; // Reset key for next pair
+                }
+            }
+        }
+        // If we hit a colon, we are entering the value of the object key
+        // No action needed really, state handles it (key is set)
+        
+        i++;
+    }
+
+    return '#';
+}
+
+/**
+ * JSON AST Helper: Finds the character index corresponding to a JSON path.
+ */
+export const getIndexFromPath = (json: string, targetPath: string): number => {
+    if (targetPath === '#' || !targetPath) return 0;
+    
+    const targetParts = targetPath.split('/').filter(p => p !== '#' && p !== '');
+    
+    let stack: { type: 'object' | 'array', index: number, key: string | null }[] = [];
+    let currentDepth = 0; // matches targetParts index
+    
+    let i = 0;
+    while (i < json.length) {
+        // Check if current stack matches target so far
+        // If stack size matches target parts size, and the last element matches, we found it.
+        
+        // Wait, we need to find the START of the value corresponding to the path.
+        if (stack.length === targetParts.length) {
+             const top = stack[stack.length - 1];
+             const targetKey = targetParts[stack.length - 1];
+             
+             let match = false;
+             if (top.type === 'array') {
+                 if (top.index.toString() === targetKey) match = true;
+             } else {
+                 if (top.key === targetKey) match = true;
+             }
+
+             if (match) return i; 
+        }
+
+        const char = json[i];
+
+        if (char === '"') {
+            const start = i;
+            i++;
+            while (i < json.length) {
+                if (json[i] === '"' && json[i-1] !== '\\') break;
+                i++;
+            }
+            if (stack.length > 0) {
+                const top = stack[stack.length - 1];
+                if (top.type === 'object' && top.key === null) {
+                    const key = json.substring(start + 1, i);
+                    top.key = key;
+                    
+                    // Optimization: If this key matches the path segment we are looking for at this depth
+                    // we are "in" the property, but we wait for ':' to define value start usually?
+                    // Actually return index at start of key is usually fine for focus.
+                    if (stack.length === targetParts.length - 1) {
+                         const nextTarget = targetParts[stack.length];
+                         if (key === nextTarget) {
+                             return start; // Return position of Key
+                         }
+                    }
+                }
+            }
+        } 
+        else if (char === '{') {
+            // Optimization check
+            if (stack.length === targetParts.length) {
+                 // We are at the start of the object definition for the path
+                 // Check if valid match logic was handled above? 
+                 // If we just entered a matching array index or object key, return i
+                 const top = stack[stack.length - 1];
+                 const targetKey = targetParts[stack.length - 1];
+                 if (top.type === 'array' && top.index.toString() === targetKey) return i;
+                 if (top.type === 'object' && top.key === targetKey) return i;
+            }
+            stack.push({ type: 'object', index: 0, key: null });
+        }
+        else if (char === '[') {
+            if (stack.length === targetParts.length) {
+                 const top = stack[stack.length - 1];
+                 const targetKey = targetParts[stack.length - 1];
+                 if (top.type === 'array' && top.index.toString() === targetKey) return i;
+                 if (top.type === 'object' && top.key === targetKey) return i;
+            }
+            stack.push({ type: 'array', index: 0, key: null });
+        }
+        else if (char === '}') {
+            stack.pop();
+        }
+        else if (char === ']') {
+            stack.pop();
+        }
+        else if (char === ',') {
+            if (stack.length > 0) {
+                const top = stack[stack.length - 1];
+                if (top.type === 'array') {
+                    top.index++;
+                } else {
+                    top.key = null;
+                }
+            }
+        }
+        
+        i++;
+    }
+
+    return 0;
+}
