@@ -1,3 +1,4 @@
+
 export enum DiffType {
   UNCHANGED = 'UNCHANGED',
   ADDED = 'ADDED',
@@ -7,10 +8,10 @@ export enum DiffType {
 
 export interface DiffNode {
   key: string;
-  value?: any; // The new value (or current value if unchanged)
-  oldValue?: any; // The old value (only for MODIFIED or REMOVED)
+  value?: any; 
+  oldValue?: any; 
   type: DiffType;
-  children?: DiffNode[]; // For nested objects/arrays
+  children?: DiffNode[]; 
   isObject: boolean;
   isArray: boolean;
 }
@@ -22,3 +23,23 @@ export interface JsonInputState {
 }
 
 export type ViewMode = 'split' | 'diff';
+
+// --- New Types for Workspace & Export ---
+
+export interface Workspace {
+    id: string;
+    name: string;
+    baseJson: any | null; // The "Original"
+    currentJson: any;     // The "Modified"
+    lastModified: number;
+}
+
+export type ExportMode = 'latest' | 'diff' | 'project';
+
+export interface ProjectFile {
+    meta: 'lineart-diff-project';
+    version: string;
+    timestamp: number;
+    base: any;
+    current: any;
+}

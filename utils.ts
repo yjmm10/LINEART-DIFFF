@@ -1,4 +1,5 @@
-import { DiffNode, DiffType } from './types';
+
+import { DiffNode, DiffType, ProjectFile } from './types';
 
 /**
  * Safely parses JSON string and attempts to extract error line number.
@@ -27,10 +28,29 @@ export const safeParse = (json: string): { parsed: any; error: string | null; er
 };
 
 /**
+ * Downloads data as a JSON file.
+ */
+export const downloadJson = (data: any, filename: string) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename.endsWith('.json') ? filename : `${filename}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+};
+
+export const isProjectFile = (data: any): data is ProjectFile => {
+    return data && data.meta === 'lineart-diff-project' && 'base' in data && 'current' in data;
+};
+
+/**
  * Recursively compares two variables to generate a Diff structure.
  */
 export const generateDiff = (oldData: any, newData: any, keyName: string = 'root'): DiffNode => {
-  // Scenario 1: One side is undefined/null where the other isn't (Addition/Deletion at root level usually handled by caller, but safe check here)
+  // Scenario 1: One side is undefined/null where the other isn't 
   if (oldData === undefined && newData !== undefined) {
     return createNode(keyName, newData, undefined, DiffType.ADDED);
   }
@@ -38,7 +58,7 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
     return createNode(keyName, undefined, oldData, DiffType.REMOVED);
   }
 
-  // Scenario 2: Type mismatch (e.g., Array vs Object, or String vs Number)
+  // Scenario 2: Type mismatch 
   const oldType = getType(oldData);
   const newType = getType(newData);
 
@@ -46,7 +66,7 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
     return createNode(keyName, newData, oldData, DiffType.MODIFIED);
   }
 
-  // Scenario 3: Primitives (String, Number, Boolean, Null)
+  // Scenario 3: Primitives 
   if (oldType === 'primitive') {
     if (oldData !== newData) {
       return createNode(keyName, newData, oldData, DiffType.MODIFIED);
@@ -60,8 +80,6 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
     const newArr = newData as any[];
     const children: DiffNode[] = [];
     
-    // We iterate through the maximum length. 
-    // Note: Array diffing is complex. This is a structural index-based diff.
     const maxLen = Math.max(oldArr.length, newArr.length);
 
     for (let i = 0; i < maxLen; i++) {
@@ -92,20 +110,14 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
       const inNew = key in newObj;
 
       if (inOld && !inNew) {
-        // Removed
         children.push(createNode(key, undefined, oldObj[key], DiffType.REMOVED));
       } else if (!inOld && inNew) {
-        // Added
         children.push(createNode(key, newObj[key], undefined, DiffType.ADDED));
       } else {
-        // Both exist, recurse
         children.push(generateDiff(oldObj[key], newObj[key], key));
       }
     });
 
-    // Sort children alphabetically by key for better readability, or keep insertion order? 
-    // JSON keys are unordered technically, but keeping distinct order helps. 
-    // Let's sort alphabetically for consistent diffing.
     children.sort((a, b) => a.key.localeCompare(b.key));
 
     const isModified = children.some(c => c.type !== DiffType.UNCHANGED);
@@ -136,18 +148,12 @@ const createNode = (key: string, value: any, oldValue: any, type: DiffType): Dif
   const isArr = Array.isArray(value || oldValue);
   const isObj = (value || oldValue) !== null && typeof (value || oldValue) === 'object' && !isArr;
 
-  // Should we recurse into Added/Removed objects to show their full structure?
-  // Yes, for the visualizer to show the tree of a removed object.
   let children: DiffNode[] | undefined = undefined;
 
-  // If we have a complex Added/Removed item, we want to "expand" it into unchanged children so it can be traversed
   const targetForChildren = value !== undefined ? value : oldValue;
   
   if (isArr || isObj) {
      if (type === DiffType.ADDED || type === DiffType.REMOVED) {
-       // Deep generate children but mark them as inheriting the parent's status visually (conceptually)
-       // Actually, generateDiff will mark them as Unchanged relative to their own structure if we passed identicals,
-       // but here we are converting a raw object to a Node tree.
        children = convertRawToNodeTree(targetForChildren, type);
      }
   }
