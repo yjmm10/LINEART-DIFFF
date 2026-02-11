@@ -1,0 +1,5 @@
+{
+  "name": "LineArt JSON Diff",
+  "description": "A modern, line-art styled JSON formatter and diff viewer inspired by Git, featuring collapsible nodes and precise structural comparison.",
+  "requestFramePermissions": []
+}

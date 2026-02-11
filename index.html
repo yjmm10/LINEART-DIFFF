@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LineArt JSON Diff</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+            },
+            colors: {
+              border: '#18181b', // zinc-950
+              paper: '#ffffff',
+              accent: '#3b82f6', // blue-500
+            },
+            boxShadow: {
+              'hard': '4px 4px 0px 0px #18181b',
+              'hard-sm': '2px 2px 0px 0px #18181b',
+            }
+          },
+        },
+      }
+    </script>
+    <style>
+      body {
+        background-color: #f4f4f5;
+        color: #18181b;
+      }
+      /* Custom Scrollbar for that raw feel */
+      ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #fff;
+        border-left: 2px solid #18181b;
+        border-top: 2px solid #18181b;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #d4d4d8;
+        border: 2px solid #18181b;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #a1a1aa;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "react": "https://esm.sh/react@^19.2.4",
+    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
