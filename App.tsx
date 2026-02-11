@@ -29,7 +29,8 @@ import {
 } from 'lucide-react';
 import { Button, Card, Modal, Input, Label, Select } from './components/ui';
 import JsonTree from './components/JsonTree';
-import { JsonEditor, JsonNavProvider } from './components/JsonEditor';
+import { JsonEditor } from './components/JsonEditor';
+import { SyncProvider } from './components/SyncContext';
 import { safeParse, generateDiff, downloadJson, isProjectFile } from './utils';
 import { DiffNode, DiffType, Workspace, ExportMode } from './types';
 
@@ -75,7 +76,6 @@ const DiffMinimap: React.FC<{ scrollContainerRef: React.RefObject<HTMLDivElement
                 const rect = htmlEl.getBoundingClientRect();
                 
                 // Calculate position relative to the top of the SCROLLABLE content
-                // absoluteTop = (currentVisualTop - containerVisualTop) + containerScrollTop
                 const relativeTop = (rect.top - containerRect.top) + scrollTop;
                 
                 const topPercent = (relativeTop / scrollHeight) * 100;
@@ -91,16 +91,13 @@ const DiffMinimap: React.FC<{ scrollContainerRef: React.RefObject<HTMLDivElement
             setMarks(newMarks);
         };
 
-        // Update initially and when trigger changes (tree expands/collapses)
-        const timeout = setTimeout(updateMarks, 300); // Small delay for rendering/layout
+        const timeout = setTimeout(updateMarks, 300); 
 
-        // Also observe DOM mutations for robust updates (e.g. expanding nodes)
         const observer = new MutationObserver(updateMarks);
         if (scrollContainerRef.current) {
             observer.observe(scrollContainerRef.current, { childList: true, subtree: true, attributes: true });
         }
         
-        // Listen to window resize
         window.addEventListener('resize', updateMarks);
 
         return () => {
@@ -118,7 +115,6 @@ const DiffMinimap: React.FC<{ scrollContainerRef: React.RefObject<HTMLDivElement
         const clickY = e.clientY - rect.top;
         const percentage = clickY / rect.height;
 
-        // Map percentage to scroll range (0 to scrollHeight - clientHeight)
         const targetTop = percentage * (container.scrollHeight - container.clientHeight);
 
         container.scrollTo({
@@ -141,7 +137,7 @@ const DiffMinimap: React.FC<{ scrollContainerRef: React.RefObject<HTMLDivElement
                     }`}
                     style={{
                         top: `${mark.top}%`,
-                        height: `${Math.max(mark.height, 0.5)}%`, // Ensure minimal visibility even for small items
+                        height: `${Math.max(mark.height, 0.5)}%`, 
                         minHeight: '2px'
                     }}
                 />
@@ -161,12 +157,10 @@ const App: React.FC = () => {
       return localStorage.getItem('lineart_active_id') || 'default';
   });
 
-  // Derived Active Workspace
   const activeWorkspace = useMemo(() => 
       workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0]
   , [workspaces, activeWorkspaceId]);
 
-  // Persist Effects
   useEffect(() => {
       localStorage.setItem('lineart_workspaces', JSON.stringify(workspaces));
   }, [workspaces]);
@@ -180,63 +174,50 @@ const App: React.FC = () => {
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const isSidebarVisible = sidebarPinned || sidebarHovered;
   
-  // Workspace Renaming State
   const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
 
-  // --- Local Editor State (Synced with Active Workspace) ---
   const [currentText, setCurrentText] = useState<string>(JSON.stringify(activeWorkspace.currentJson, null, 2));
   
-  // Sync text when workspace changes
   useEffect(() => {
       setCurrentText(JSON.stringify(activeWorkspace.currentJson, null, 2));
       setError(null);
       setErrorLine(undefined);
   }, [activeWorkspaceId]);
 
-  // UI Controls
   const [editorView, setEditorView] = useState<'text' | 'tree'>('text');
   const [error, setError] = useState<string | null>(null);
   const [errorLine, setErrorLine] = useState<number | undefined>(undefined);
   const [copyFeedback, setCopyFeedback] = useState(false);
   
-  // Modals
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
   
-  // Export State
   const [exportFilename, setExportFilename] = useState("data");
   const [exportMode, setExportMode] = useState<ExportMode>('latest');
   
-  // Workspace Management State
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
 
-  // Compare Modal State
   const [compareBaseFile, setCompareBaseFile] = useState<any>(null);
   const [compareCurrentFile, setCompareCurrentFile] = useState<any>(null);
 
-  // Layout State
   const [expandAllKey, setExpandAllKey] = useState(0);
-  // Default to 'smart' to satisfy user preference for optimization
   const [diffExpandMode, setDiffExpandMode] = useState<'all' | 'none' | 'smart'>('smart');
   const [editorExpandAll, setEditorExpandAll] = useState(true);
 
   const [leftPanelWidth, setLeftPanelWidth] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
   
-  // Refs
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const diffScrollRef = useRef<HTMLDivElement>(null);
   const [cursorPos, setCursorPos] = useState<number | null>(null);
 
-  // --- PERFORMANCE: Debounce Text Changes ---
   useEffect(() => {
       const handler = setTimeout(() => {
           const result = safeParse(currentText);
           if (result.parsed) {
-              // Only update if actually changed to avoid cycles
               if (JSON.stringify(result.parsed) !== JSON.stringify(activeWorkspace.currentJson)) {
                   updateActiveWorkspace({ currentJson: result.parsed });
               }
@@ -246,7 +227,7 @@ const App: React.FC = () => {
               setError(result.error);
               setErrorLine(result.errorLine);
           }
-      }, 600); // 600ms delay for large files
+      }, 600); 
 
       return () => clearTimeout(handler);
   }, [currentText]);
@@ -265,7 +246,7 @@ const App: React.FC = () => {
           id: Date.now().toString(),
           name: newWorkspaceName,
           baseJson: null,
-          currentJson: {}, // Initialize as empty
+          currentJson: {},
           lastModified: Date.now()
       };
       setWorkspaces([...workspaces, newSpace]);
@@ -318,7 +299,6 @@ const App: React.FC = () => {
 
   const handleTextChange = (text: string) => {
     setCurrentText(text);
-    // Parsing happens in Debounce effect
   };
 
   const handleObjectChange = (newObj: any) => {
@@ -417,8 +397,6 @@ const App: React.FC = () => {
     reader.readAsText(file);
   };
 
-  // --- Compare Modal Handlers ---
-
   const handleCompareFileLoad = (e: React.ChangeEvent<HTMLInputElement>, type: 'base' | 'current') => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -438,32 +416,27 @@ const App: React.FC = () => {
   const applyCompare = () => {
       if (compareCurrentFile) {
           updateActiveWorkspace({
-              baseJson: compareBaseFile, // Can be null if they only want to load current
+              baseJson: compareBaseFile, 
               currentJson: compareCurrentFile
           });
           setCurrentText(JSON.stringify(compareCurrentFile, null, 2));
           setIsCompareModalOpen(false);
-          // Reset
           setCompareBaseFile(null);
           setCompareCurrentFile(null);
       }
   };
-
-  // --- Editor Inputs ---
 
   const formatJson = () => {
     const result = safeParse(currentText);
     if (result.parsed) {
       const formatted = JSON.stringify(result.parsed, null, 2);
       setCurrentText(formatted);
-      // Immediate update for format
       updateActiveWorkspace({ currentJson: result.parsed });
       setError(null);
       setErrorLine(undefined);
     }
   };
 
-  // Cursor & Formatting Logic (Tab, Enter)
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const { selectionStart, selectionEnd, value } = e.currentTarget;
     if (e.key === 'Tab') {
@@ -472,7 +445,6 @@ const App: React.FC = () => {
       setCurrentText(newText);
       setCursorPos(selectionStart + 2);
     } else if (e.key === 'Enter') {
-      // Basic indent logic
       e.preventDefault();
       const before = value.substring(0, selectionStart);
       const after = value.substring(selectionEnd);
@@ -494,15 +466,13 @@ const App: React.FC = () => {
     }
   };
 
-  // Restore cursor
   useEffect(() => {
     if (cursorPos !== null && textareaRef.current) {
       textareaRef.current.setSelectionRange(cursorPos, cursorPos);
       setCursorPos(null);
     }
-  }, [cursorPos]); // removed currentText dependency to avoid jumping during typing
+  }, [cursorPos]);
 
-  // Dragging Logic
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging || !containerRef.current) return;
@@ -531,8 +501,6 @@ const App: React.FC = () => {
     };
   }, [isDragging]);
 
-  // --- Computations ---
-
   const diffTree: DiffNode | null = useMemo(() => {
     if (!activeWorkspace.baseJson) return null;
     return generateDiff(activeWorkspace.baseJson, activeWorkspace.currentJson, 'root');
@@ -556,13 +524,11 @@ const App: React.FC = () => {
   return (
     <div className="h-screen flex font-sans text-zinc-900 bg-zinc-50 overflow-hidden">
       
-      {/* --- SIDEBAR --- */}
       <aside 
          className={`h-full bg-paper border-r-2 border-border shadow-hard z-50 flex flex-col transition-all duration-300 ease-in-out relative ${isSidebarVisible ? 'w-64' : 'w-16'}`}
          onMouseEnter={() => setSidebarHovered(true)}
          onMouseLeave={() => setSidebarHovered(false)}
       >
-          {/* Sidebar Header */}
           <div className="p-4 flex items-center justify-between border-b-2 border-zinc-100 h-16 shrink-0 overflow-hidden whitespace-nowrap">
                <div className="flex items-center gap-3">
                    <div className="bg-black text-white p-2 shrink-0">
@@ -580,10 +546,7 @@ const App: React.FC = () => {
                )}
           </div>
 
-          {/* Sidebar Content */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 space-y-4">
-               
-               {/* Workspaces Section */}
                <div className="space-y-2">
                    {isSidebarVisible && (
                        <div className="px-2 text-xs font-bold text-zinc-400 uppercase tracking-wider flex justify-between items-center">
@@ -628,8 +591,6 @@ const App: React.FC = () => {
                                            <span className="text-sm font-bold truncate pr-2 select-none">
                                                {ws.name}
                                            </span>
-                                           
-                                           {/* Actions: Visible on group hover */}
                                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                <button 
                                                    onClick={(e) => startRenaming(ws, e)}
@@ -656,7 +617,6 @@ const App: React.FC = () => {
 
                <div className="border-t border-zinc-200 my-2"></div>
 
-               {/* Actions Section */}
                <div className="space-y-1">
                    {isSidebarVisible && <div className="px-2 text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Tools</div>}
                    
@@ -672,7 +632,6 @@ const App: React.FC = () => {
                </div>
           </div>
 
-          {/* Sidebar Footer */}
           <div className="p-2 border-t border-zinc-200 shrink-0">
                <button onClick={() => setIsWorkspaceModalOpen(true)} className="w-full flex items-center justify-center gap-2 p-2 bg-black text-white font-bold hover:bg-zinc-800 transition-colors shadow-hard-sm">
                    <Plus size={16} />
@@ -684,7 +643,6 @@ const App: React.FC = () => {
       {/* --- MAIN LAYOUT --- */}
       <div className="flex-1 flex flex-col h-full min-w-0">
           
-          {/* HEADER (View Controls Only) */}
           <header className="bg-paper border-b-2 border-border p-4 shrink-0 z-40 shadow-sm flex items-center justify-between gap-4">
              <div className="flex items-center gap-2">
                  {!isSidebarVisible && (
@@ -730,7 +688,6 @@ const App: React.FC = () => {
              </div>
           </header>
 
-          {/* MAIN CONTENT AREA */}
           <main 
              ref={containerRef}
              className="flex-1 w-full p-4 md:p-6 flex flex-col lg:flex-row gap-6 lg:gap-0 overflow-hidden min-h-0"
@@ -748,7 +705,6 @@ const App: React.FC = () => {
                    </div>
                    
                    <div className="flex items-center gap-2">
-                       {/* Editor Controls */}
                        <div className="flex items-center gap-2 mr-2 border-r pr-2 border-zinc-200">
                            <button 
                               onClick={handleCopyJson} 
@@ -789,8 +745,6 @@ const App: React.FC = () => {
                 </div>
 
                 <Card className="flex-1 bg-white relative min-h-0">
-                   {/* Removed Floating controls, now in header */}
-
                    {error && (
                       <div className="absolute bottom-0 left-0 right-0 bg-rose-50 border-t-2 border-rose-400 text-rose-900 px-4 py-3 text-xs font-bold z-20 flex items-center gap-2 shadow-lg">
                          <AlertTriangle size={16} className="shrink-0" /> 
@@ -814,7 +768,7 @@ const App: React.FC = () => {
                            />
                        ) : (
                            <div className="absolute inset-0 overflow-auto p-4 bg-white">
-                              <JsonNavProvider>
+                              <SyncProvider>
                                 {activeWorkspace.currentJson ? (
                                    <JsonEditor 
                                       key={`editor-${expandAllKey}`} 
@@ -827,14 +781,13 @@ const App: React.FC = () => {
                                 ) : (
                                    <div className="text-zinc-400 text-center mt-10 font-mono text-sm">Valid JSON required for Tree View</div>
                                 )}
-                              </JsonNavProvider>
+                              </SyncProvider>
                            </div>
                        )}
                    </div>
                 </Card>
              </div>
 
-             {/* SPLITTER */}
              <div 
                  className="hidden lg:flex w-4 items-center justify-center cursor-col-resize hover:bg-zinc-200 transition-colors mx-2 rounded shrink-0" 
                  onMouseDown={() => setIsDragging(true)}
@@ -843,7 +796,6 @@ const App: React.FC = () => {
                  <div className="w-1 h-8 bg-zinc-300 rounded-full flex items-center justify-center"></div>
              </div>
 
-             {/* RIGHT PANE: DIFF VIEWER */}
              <div className="flex-1 flex flex-col h-full w-full min-w-0 min-h-0">
                  <div className="flex justify-between items-end mb-2 shrink-0">
                     <div className="flex items-center gap-2">
@@ -864,32 +816,34 @@ const App: React.FC = () => {
 
                  <Card className="flex-1 bg-white min-h-0 relative">
                      <div ref={diffScrollRef} className="absolute inset-0 overflow-auto p-4 pr-6 scroll-smooth">
-                        {isInitialized && activeWorkspace.baseJson ? (
-                            diffTree ? (
-                               <JsonTree 
-                                  key={`diff-${expandAllKey}`} 
-                                  data={diffTree} 
-                                  isRoot={true} 
-                                  expandMode={diffExpandMode}
-                               />
+                        <SyncProvider>
+                            {isInitialized && activeWorkspace.baseJson ? (
+                                diffTree ? (
+                                <JsonTree 
+                                    key={`diff-${expandAllKey}`} 
+                                    data={diffTree} 
+                                    isRoot={true} 
+                                    expandMode={diffExpandMode}
+                                    path="#"
+                                />
+                                ) : (
+                                <div className="flex flex-col items-center justify-center h-full text-zinc-400">
+                                    <p>No structural changes detected.</p>
+                                </div>
+                                )
                             ) : (
-                               <div className="flex flex-col items-center justify-center h-full text-zinc-400">
-                                  <p>No structural changes detected.</p>
-                               </div>
-                            )
-                        ) : (
-                            <div className="flex flex-col items-center justify-center h-full text-zinc-400 opacity-60 text-center px-8">
-                                 <div className="border-2 border-dashed border-zinc-300 p-6 rounded-lg mb-4">
-                                    <FileText size={48} className="text-zinc-300" />
-                                 </div>
-                                 <p className="font-bold text-zinc-600">No Original Version Set</p>
-                                 <p className="text-sm mt-2 max-w-xs">
-                                   Load files via the sidebar "Compare Files" or click "Set as Original" to start.
-                                 </p>
-                            </div>
-                        )}
+                                <div className="flex flex-col items-center justify-center h-full text-zinc-400 opacity-60 text-center px-8">
+                                    <div className="border-2 border-dashed border-zinc-300 p-6 rounded-lg mb-4">
+                                        <FileText size={48} className="text-zinc-300" />
+                                    </div>
+                                    <p className="font-bold text-zinc-600">No Original Version Set</p>
+                                    <p className="text-sm mt-2 max-w-xs">
+                                    Load files via the sidebar "Compare Files" or click "Set as Original" to start.
+                                    </p>
+                                </div>
+                            )}
+                        </SyncProvider>
                      </div>
-                     {/* OVERVIEW RULER (MINIMAP) */}
                      {isInitialized && (
                          <DiffMinimap scrollContainerRef={diffScrollRef} triggerUpdate={diffTree} />
                      )}
@@ -898,9 +852,6 @@ const App: React.FC = () => {
           </main>
       </div>
 
-      {/* --- MODALS --- */}
-
-      {/* 1. Export Modal */}
       <Modal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} title="Import / Export">
           <div className="space-y-6">
               
@@ -959,7 +910,6 @@ const App: React.FC = () => {
           </div>
       </Modal>
 
-      {/* 2. Workspace Manager Modal */}
       <Modal isOpen={isWorkspaceModalOpen} onClose={() => setIsWorkspaceModalOpen(false)} title="New Project">
            <div className="space-y-4">
                <p className="text-sm text-zinc-500">Create a new empty workspace.</p>
@@ -980,7 +930,6 @@ const App: React.FC = () => {
            </div>
       </Modal>
 
-      {/* 3. Compare Modal */}
       <Modal isOpen={isCompareModalOpen} onClose={() => setIsCompareModalOpen(false)} title="Compare Files">
           <div className="space-y-6">
               <p className="text-sm text-zinc-500">Upload two files to compare. This will overwrite the current workspace.</p>

@@ -1,67 +1,42 @@
 
-import React, { useState, useRef, useEffect, useContext, createContext } from 'react';
-import { ChevronRight, ChevronDown, Plus, Trash2, X, MoreHorizontal, FileType, ExternalLink, Link as LinkIcon } from 'lucide-react';
+import React, { useState, useRef, useEffect, useContext, createContext, useId, useCallback } from 'react';
+import { ChevronRight, ChevronDown, Plus, Trash2, X, MoreHorizontal, FileType, ExternalLink, Link as LinkIcon, GripVertical, CornerDownRight, Copy, Check } from 'lucide-react';
+import { useSync } from './SyncContext';
 
-// --- Navigation Context ---
-interface JsonNavContextType {
-    register: (path: string, expand: () => void) => void;
-    unregister: (path: string) => void;
-    jumpTo: (path: string) => void;
+// --- Mutation Context (For Global Moves) ---
+interface JsonMutationContextType {
+    handleGlobalMove: (fromPath: string, toPath: string, position: 'before' | 'after' | 'inside') => void;
 }
 
-const JsonNavContext = createContext<JsonNavContextType>({ 
-    register: () => {}, unregister: () => {}, jumpTo: () => {} 
-});
+const JsonMutationContext = createContext<JsonMutationContextType | null>(null);
 
-export const JsonNavProvider: React.FC<{children: React.ReactNode}> = ({children}) => {
-    const nodes = useRef<Map<string, () => void>>(new Map());
+// --- Helper: Path Traversal & Manipulation ---
+
+const getPathParts = (path: string) => path.split('/').filter(p => p !== '#' && p !== '');
+
+const getNodeByPath = (root: any, path: string) => {
+    const parts = getPathParts(path);
+    let current = root;
+    for (const part of parts) {
+        if (current && typeof current === 'object') {
+            current = Array.isArray(current) ? current[parseInt(part)] : current[part];
+        } else {
+            return undefined;
+        }
+    }
+    return current;
+};
+
+const getParentAndKey = (root: any, path: string) => {
+    const parts = getPathParts(path);
+    if (parts.length === 0) return { parent: null, key: null };
     
-    const register = (path: string, expand: () => void) => {
-        nodes.current.set(path, expand);
-    };
-    
-    const unregister = (path: string) => {
-        nodes.current.delete(path);
-    };
-    
-    const jumpTo = (path: string) => {
-        // Parse path: #/definitions/region -> ["definitions", "region"]
-        const parts = path.split('/').filter(p => p !== '#' && p !== '');
-        
-        let currentPath = '#';
-        
-        // Always try to expand root
-        const expandRoot = nodes.current.get('#');
-        if(expandRoot) expandRoot();
-
-        // Sequentially expand path segments
-        parts.forEach(part => {
-            currentPath += `/${part}`;
-            const expand = nodes.current.get(currentPath);
-            if(expand) expand();
-        });
-
-        // Scroll to element after render
-        setTimeout(() => {
-            const el = document.querySelector(`[data-path="${path}"]`);
-            if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                // Add highlight effect
-                el.classList.add('bg-yellow-100/50', 'ring-2', 'ring-yellow-400', 'rounded');
-                setTimeout(() => {
-                    el.classList.remove('bg-yellow-100/50', 'ring-2', 'ring-yellow-400', 'rounded');
-                }, 1500);
-            } else {
-                console.warn(`Target path ${path} not found in DOM`);
-            }
-        }, 150);
-    };
-
-    return (
-        <JsonNavContext.Provider value={{ register, unregister, jumpTo }}>
-            {children}
-        </JsonNavContext.Provider>
-    );
+    const key = parts.pop()!;
+    let parent = root;
+    for (const part of parts) {
+        parent = Array.isArray(parent) ? parent[parseInt(part)] : parent[part];
+    }
+    return { parent, key };
 };
 
 // --- Editor Component ---
@@ -74,7 +49,8 @@ interface JsonEditorProps {
   onKeyChange?: (newKey: string) => void; 
   isRoot?: boolean;
   defaultOpen?: boolean;
-  path?: string; // Current JSON Pointer path
+  path?: string; 
+  index?: number;
 }
 
 const getDataType = (data: any): 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null' => {
@@ -115,7 +91,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   onKeyChange, 
   isRoot = false,
   defaultOpen = true,
-  path
+  path,
+  index
 }) => {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const type = getDataType(data);
@@ -125,49 +102,43 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   // Interaction States
   const [isAdding, setIsAdding] = useState(false);
   const [isChangingType, setIsChangingType] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
 
-  // Navigation Context
-  const { register, unregister, jumpTo } = useContext(JsonNavContext);
+  // DnD State
+  const [isDragging, setIsDragging] = useState(false);
+  const [dropState, setDropState] = useState<'none' | 'before' | 'after' | 'inside'>('none');
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Contexts
+  const { register, unregister, syncTo } = useSync();
+  const mutationContext = useContext(JsonMutationContext);
   
-  // Calculate current path
   const currentPath = isRoot ? '#' : (path || '');
 
-  // Register node for navigation
+  // Register for Navigation
   useEffect(() => {
-      register(currentPath, () => setIsOpen(true));
-      return () => unregister(currentPath);
+      register('editor', currentPath, () => setIsOpen(true));
+      return () => unregister('editor', currentPath);
   }, [currentPath, register, unregister]);
 
-  // Force open if defaultOpen changes (global expand/collapse)
-  useEffect(() => {
-    setIsOpen(defaultOpen);
-  }, [defaultOpen]);
+  useEffect(() => setIsOpen(defaultOpen), [defaultOpen]);
+  useEffect(() => setLocalValue(data), [data]);
+  useEffect(() => { if(fieldKey !== undefined) setLocalKey(fieldKey); }, [fieldKey]);
 
-  // Sync props to local state
-  useEffect(() => {
-    setLocalValue(data);
-  }, [data]);
-  
-  useEffect(() => {
-      if(fieldKey !== undefined) setLocalKey(fieldKey);
-  }, [fieldKey]);
+  // --- Handlers ---
 
   const handleKeyBlur = () => {
-    if (onKeyChange && localKey !== fieldKey) {
-      onKeyChange(localKey);
-    }
+    if (onKeyChange && localKey !== fieldKey) onKeyChange(localKey);
   };
 
   const handleValueChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setLocalValue(val);
-    
     let parsed: any = val;
     if (val === 'true') parsed = true;
     else if (val === 'false') parsed = false;
     else if (val === 'null') parsed = null;
     else if (!isNaN(Number(val)) && val.trim() !== '') parsed = Number(val);
-    
     onChange(parsed);
   };
 
@@ -187,11 +158,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
     if (type === 'object') {
       const newObj: Record<string, any> = {};
       Object.keys(data).forEach(k => {
-        if (k === oldKey) {
-          newObj[newKey] = data[k];
-        } else {
-          newObj[k] = data[k];
-        }
+        if (k === oldKey) newObj[newKey] = data[k];
+        else newObj[k] = data[k];
       });
       onChange(newObj);
     }
@@ -224,30 +192,220 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   };
 
   const handleChangeType = (newType: string) => {
-      const newValue = getInitialValue(newType);
-      onChange(newValue);
+      onChange(getInitialValue(newType));
       setIsChangingType(false);
+  };
+
+  const handleCopy = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      let content = data;
+      // If fieldKey exists, it implies this is an object property, so wrap it
+      // Array items have index passed but fieldKey is undefined
+      if (fieldKey !== undefined) {
+         content = { [fieldKey]: data };
+      }
+      navigator.clipboard.writeText(JSON.stringify(content, null, 2));
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  // --- Global Move Logic (Root Only) ---
+  
+  const performGlobalMove = useCallback((fromPath: string, toPath: string, position: 'before' | 'after' | 'inside') => {
+      // Deep clone whole tree
+      const newData = JSON.parse(JSON.stringify(data));
+      
+      // 1. Get Source Info
+      const { parent: fromParent, key: fromKey } = getParentAndKey(newData, fromPath);
+      if (!fromParent) return;
+
+      // 2. Extract Value
+      const isArray = Array.isArray(fromParent);
+      const val = isArray ? fromParent[Number(fromKey)] : fromParent[fromKey];
+      
+      // 3. Remove Source
+      if (isArray) {
+          fromParent.splice(Number(fromKey), 1);
+      } else {
+          delete fromParent[fromKey];
+      }
+
+      // 4. Calculate Insert Target
+      if (toPath.startsWith(fromPath + '/')) return;
+
+      let targetParent, targetKey;
+
+      if (position === 'inside') {
+          targetParent = getNodeByPath(newData, toPath);
+          if (typeof targetParent !== 'object' || targetParent === null) return; 
+      } else {
+          const res = getParentAndKey(newData, toPath);
+          targetParent = res.parent;
+          targetKey = res.key;
+          if (!targetParent) return;
+      }
+
+      // 5. Insert
+      if (Array.isArray(targetParent)) {
+          if (position === 'inside') {
+              targetParent.push(val);
+          } else {
+              let idx = Number(targetKey);
+              if (position === 'after') idx += 1;
+              targetParent.splice(idx, 0, val);
+          }
+      } else {
+          // Object
+          if (position === 'inside') {
+              let i = 1;
+              let k = `moved_key_${i}`;
+              const originalKey = getPathParts(fromPath).pop() || 'key';
+              if (!targetParent[originalKey]) k = originalKey;
+              else {
+                   while (targetParent[k]) { i++; k = `moved_key_${i}`; }
+              }
+              targetParent[k] = val;
+          } else {
+              // Reorder keys
+              const entries = Object.entries(targetParent);
+              const newEntries: [string, any][] = [];
+              const insertKey = getPathParts(fromPath).pop() || 'moved_key';
+              let safeKey = insertKey;
+              let c = 1;
+              while (Object.prototype.hasOwnProperty.call(targetParent, safeKey) && safeKey !== targetKey) { 
+                  if (fromParent === targetParent && safeKey === fromKey) break; 
+                  safeKey = `${insertKey}_${c++}`;
+              }
+
+              entries.forEach(([k, v]) => {
+                  if (k === targetKey && position === 'before') newEntries.push([safeKey, val]);
+                  newEntries.push([k, v]);
+                  if (k === targetKey && position === 'after') newEntries.push([safeKey, val]);
+              });
+              
+              for (const k in targetParent) delete targetParent[k];
+              newEntries.forEach(([k, v]) => targetParent[k] = v);
+          }
+      }
+
+      onChange(newData);
+  }, [data, onChange]);
+
+
+  // --- DnD Event Handlers ---
+
+  const handleDragStart = (e: React.DragEvent) => {
+      e.stopPropagation();
+      setIsDragging(true);
+      e.dataTransfer.setData('lineart/path', currentPath);
+      e.dataTransfer.effectAllowed = 'move';
+      
+      const preview = document.createElement('div');
+      preview.innerText = `{ ${localKey || 'Item'} }`;
+      preview.style.background = 'black';
+      preview.style.color = 'white';
+      preview.style.padding = '4px 8px';
+      preview.style.borderRadius = '4px';
+      preview.style.position = 'absolute';
+      preview.style.top = '-1000px';
+      document.body.appendChild(preview);
+      e.dataTransfer.setDragImage(preview, 0, 0);
+      setTimeout(() => document.body.removeChild(preview), 0);
+  };
+
+  const handleDragEnd = () => {
+      setIsDragging(false);
+      setDropState('none');
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      if (isDragging) return; 
+
+      const rect = ref.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const y = e.clientY - rect.top;
+      const height = rect.height;
+      const isContainer = type === 'object' || type === 'array';
+      
+      if (isContainer && isOpen) {
+          if (y < height * 0.25 && !isRoot) setDropState('before');
+          else if (y > height * 0.75 && !isRoot) setDropState('after');
+          else setDropState('inside');
+      } else {
+          if (y < height * 0.5 && !isRoot) setDropState('before');
+          else if (!isRoot) setDropState('after');
+          else setDropState('inside');
+      }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDropState('none');
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const fromPath = e.dataTransfer.getData('lineart/path');
+      if (!fromPath) return;
+      if (fromPath === currentPath) return; 
+      
+      if (isRoot) performGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState);
+      else if (mutationContext) mutationContext.handleGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState);
+      
+      setDropState('none');
   };
 
   const isContainer = type === 'object' || type === 'array';
   const childCount = isContainer ? Object.keys(data).length : 0;
-  
-  // Check if value is a reference (starts with #/)
   const isRef = typeof localValue === 'string' && localValue.startsWith('#/');
 
-  return (
+  const handleSyncJump = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      syncTo('diff', currentPath);
+  };
+
+  // --- Render ---
+
+  const content = (
     <div 
-        className={`font-mono text-sm leading-7 ${!isRoot ? 'ml-4' : ''} relative transition-colors duration-300`} 
-        data-path={currentPath}
+        ref={ref}
+        className={`font-mono text-sm leading-7 ${!isRoot ? 'ml-4' : ''} relative transition-all duration-200 
+            ${isDragging ? 'opacity-40' : 'opacity-100'}
+        `} 
+        data-sync-id={`editor:${currentPath}`}
+        draggable={!isRoot}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onDoubleClick={handleSyncJump}
     >
+      {/* Drop Zone Indicators */}
+      {dropState === 'before' && <div className="absolute -top-[2px] left-0 right-0 h-[4px] bg-accent rounded-full z-10 pointer-events-none" />}
+      {dropState === 'after' && <div className="absolute -bottom-[2px] left-0 right-0 h-[4px] bg-accent rounded-full z-10 pointer-events-none" />}
+      {dropState === 'inside' && <div className="absolute inset-0 bg-accent/10 border-2 border-accent rounded z-10 pointer-events-none" />}
+
       <div className="flex items-center gap-2 group hover:bg-zinc-100 rounded px-1 -ml-1 transition-colors relative">
         
-        {/* Expand/Collapse Toggle */}
+        {!isRoot && (
+            <div className="absolute -left-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-40 hover:!opacity-100 cursor-grab active:cursor-grabbing transition-opacity p-0.5 text-zinc-400">
+                <GripVertical size={12} />
+            </div>
+        )}
+
         {isContainer ? (
           <button 
-            onClick={() => setIsOpen(!isOpen)} 
+            onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }} 
             className="w-4 h-4 flex items-center justify-center text-zinc-500 hover:text-black focus:outline-none transition-colors"
-            title={isOpen ? "Collapse block" : "Expand block"}
           >
             {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           </button>
@@ -255,7 +413,6 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
           <span className="w-4" /> 
         )}
 
-        {/* Key Input (if part of object) */}
         {!isRoot && fieldKey !== undefined && onKeyChange && (
           <div className="flex items-center gap-1">
              <input 
@@ -265,35 +422,26 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                onChange={(e) => setLocalKey(e.target.value)}
                onBlur={handleKeyBlur}
                spellCheck={false}
+               onDoubleClick={(e) => e.stopPropagation()} 
              />
              <span className="text-zinc-400">:</span>
           </div>
         )}
 
-        {/* Array Index (if part of array) */}
-        {!isRoot && fieldKey === undefined && (
-           <span className="text-zinc-300 mr-1 select-none">•</span>
-        )}
+        {!isRoot && fieldKey === undefined && <span className="text-zinc-300 mr-1 select-none">•</span>}
 
-        {/* Value Display / Input */}
         {isContainer ? (
           <div className="flex items-center gap-2">
-            <span className="text-zinc-500 font-bold select-none">
-               {type === 'array' ? '[' : '{'}
-            </span>
+            <span className="text-zinc-500 font-bold select-none">{type === 'array' ? '[' : '{'}</span>
             {!isOpen && (
               <button 
                  className="text-zinc-400 text-xs px-1.5 py-0.5 bg-zinc-100 hover:bg-zinc-200 rounded cursor-pointer select-none transition-colors" 
-                 onClick={() => setIsOpen(true)}
+                 onClick={(e) => { e.stopPropagation(); setIsOpen(true); }}
               >
                  {childCount} items
               </button>
             )}
-            {!isOpen && (
-               <span className="text-zinc-500 font-bold select-none">
-                 {type === 'array' ? ']' : '}'}
-               </span>
-            )}
+            {!isOpen && <span className="text-zinc-500 font-bold select-none">{type === 'array' ? ']' : '}'}</span>}
           </div>
         ) : (
           <div className="flex-1 flex items-center relative">
@@ -305,13 +453,12 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                 value={localValue === null ? 'null' : localValue.toString()}
                 onChange={handleValueChange}
                 spellCheck={false}
+                onDoubleClick={(e) => e.stopPropagation()}
               />
-              {/* Reference Jump Button */}
               {isRef && (
                   <button 
-                    onClick={() => jumpTo(localValue)}
+                    onClick={(e) => { e.stopPropagation(); /* jumpTo logic if needed locally */ }}
                     className="ml-2 text-zinc-400 hover:text-accent p-0.5 hover:bg-blue-50 rounded transition-colors"
-                    title={`Jump to ${localValue}`}
                   >
                       <ExternalLink size={12} />
                   </button>
@@ -319,55 +466,48 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
           </div>
         )}
 
-        {/* Actions Hover Menu */}
-        <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-opacity ml-2">
+        {/* Actions Menu */}
+        <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-opacity ml-2 bg-white/80 backdrop-blur-sm rounded-sm z-20">
            
-           {/* Add Child (if container) */}
+           <button 
+               onClick={handleCopy} 
+               className={`p-1 hover:bg-zinc-200 text-zinc-600 rounded ${isCopied ? 'text-emerald-600 bg-emerald-50' : ''}`}
+               title="Copy JSON"
+           >
+               {isCopied ? <Check size={14} /> : <Copy size={14} />}
+           </button>
+
            {isContainer && (
              <div className="relative">
-                <button 
-                    onClick={() => setIsAdding(!isAdding)} 
-                    className={`p-1 hover:bg-emerald-100 text-emerald-600 rounded ${isAdding ? 'bg-emerald-100' : ''}`} 
-                    title="Add Item"
-                >
+                <button onClick={(e) => { e.stopPropagation(); setIsAdding(!isAdding); }} className={`p-1 hover:bg-emerald-100 text-emerald-600 rounded ${isAdding ? 'bg-emerald-100' : ''}`}>
                     <Plus size={14} />
                 </button>
-                {isAdding && (
-                    <TypeSelector onSelect={handleAddChild} onCancel={() => setIsAdding(false)} />
-                )}
+                {isAdding && <TypeSelector onSelect={handleAddChild} onCancel={() => setIsAdding(false)} />}
              </div>
            )}
 
-           {/* Change Type (Generic) */}
            <div className="relative">
-                <button 
-                   onClick={() => setIsChangingType(!isChangingType)}
-                   className={`p-1 hover:bg-blue-100 text-blue-600 rounded ${isChangingType ? 'bg-blue-100' : ''}`}
-                   title="Change Type"
-                >
+                <button onClick={(e) => { e.stopPropagation(); setIsChangingType(!isChangingType); }} className={`p-1 hover:bg-blue-100 text-blue-600 rounded ${isChangingType ? 'bg-blue-100' : ''}`}>
                    <FileType size={14} />
                 </button>
-                {isChangingType && (
-                    <TypeSelector onSelect={handleChangeType} onCancel={() => setIsChangingType(false)} />
-                )}
+                {isChangingType && <TypeSelector onSelect={handleChangeType} onCancel={() => setIsChangingType(false)} />}
            </div>
 
-           {/* Delete (if not root) */}
            {!isRoot && onDelete && (
-             <button onClick={onDelete} className="p-1 hover:bg-rose-100 text-rose-600 rounded" title="Delete Item">
+             <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-1 hover:bg-rose-100 text-rose-600 rounded">
                 <Trash2 size={14} />
              </button>
            )}
         </div>
       </div>
 
-      {/* Recursive Children */}
       {isContainer && isOpen && (
         <div className="border-l border-zinc-200 ml-[7px] pl-2 my-1">
           {type === 'array' ? (
              (data as any[]).map((item, idx) => (
                 <JsonEditor 
                   key={idx}
+                  index={idx}
                   data={item}
                   onChange={(val) => handleChildChange(idx, val)}
                   onDelete={() => handleDeleteChild(idx)}
@@ -376,9 +516,10 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                 />
              ))
           ) : (
-            Object.keys(data).map((key) => (
+            Object.keys(data).map((key, idx) => (
                <JsonEditor 
                  key={key}
+                 index={idx}
                  fieldKey={key}
                  data={data[key]}
                  onKeyChange={(newKey) => handleChildKeyChange(key, newKey)}
@@ -389,11 +530,19 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                />
             ))
           )}
-          <div className="ml-4 text-zinc-500 font-bold select-none">
-            {type === 'array' ? ']' : '}'}
-          </div>
+          <div className="ml-4 text-zinc-500 font-bold select-none">{type === 'array' ? ']' : '}'}</div>
         </div>
       )}
     </div>
   );
+
+  if (isRoot) {
+      return (
+          <JsonMutationContext.Provider value={{ handleGlobalMove: performGlobalMove }}>
+              {content}
+          </JsonMutationContext.Provider>
+      );
+  }
+
+  return content;
 };
