@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, useContext, createContext } from 'react';
 import { ChevronRight, ChevronDown, Plus, Trash2, X, MoreHorizontal, FileType, ExternalLink, Link as LinkIcon } from 'lucide-react';
 
@@ -246,6 +247,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
           <button 
             onClick={() => setIsOpen(!isOpen)} 
             className="w-4 h-4 flex items-center justify-center text-zinc-500 hover:text-black focus:outline-none transition-colors"
+            title={isOpen ? "Collapse block" : "Expand block"}
           >
             {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           </button>

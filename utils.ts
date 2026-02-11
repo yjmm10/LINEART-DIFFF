@@ -88,13 +88,17 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
       children.push(generateDiff(oldVal, newVal, i.toString()));
     }
 
+    // If array content changed, mark as MODIFIED
+    const type = children.every(c => c.type === DiffType.UNCHANGED) ? DiffType.UNCHANGED : DiffType.MODIFIED;
+
     return {
       key: keyName,
-      type: children.every(c => c.type === DiffType.UNCHANGED) ? DiffType.UNCHANGED : DiffType.MODIFIED,
+      type,
       isObject: false,
       isArray: true,
       children,
-      value: newData
+      value: newData,
+      oldValue: oldData
     };
   }
 
@@ -103,17 +107,15 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
     const oldObj = oldData as Record<string, any>;
     const newObj = newData as Record<string, any>;
     
-    // PRESERVE ORDER: Use keys from newObj (the modified version) first
-    const newKeys = Object.keys(newObj);
-    // Then append keys that were ONLY in oldObj (the removed ones)
-    const removedKeys = Object.keys(oldObj).filter(k => !newObj.hasOwnProperty(k));
-    
-    const keys = [...newKeys, ...removedKeys];
+    // PRESERVE ORDER: 
+    // Combine keys from oldObj first (to keep removed/existing items in original relative order)
+    // Then append any NEW keys from newObj that weren't in oldObj.
+    const keys = Array.from(new Set([...Object.keys(oldObj), ...Object.keys(newObj)]));
     const children: DiffNode[] = [];
 
     keys.forEach(key => {
-      const inOld = key in oldObj;
-      const inNew = key in newObj;
+      const inOld = Object.prototype.hasOwnProperty.call(oldObj, key);
+      const inNew = Object.prototype.hasOwnProperty.call(newObj, key);
 
       if (inOld && !inNew) {
         children.push(createNode(key, undefined, oldObj[key], DiffType.REMOVED));
@@ -124,9 +126,6 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
       }
     });
 
-    // DO NOT SORT ALPHABETICALLY - Keep logic order
-    // children.sort((a, b) => a.key.localeCompare(b.key));
-
     const isModified = children.some(c => c.type !== DiffType.UNCHANGED);
 
     return {
@@ -135,7 +134,8 @@ export const generateDiff = (oldData: any, newData: any, keyName: string = 'root
       isObject: true,
       isArray: false,
       children,
-      value: newData
+      value: newData,
+      oldValue: oldData
     };
   }
 
@@ -157,11 +157,18 @@ const createNode = (key: string, value: any, oldValue: any, type: DiffType): Dif
 
   let children: DiffNode[] | undefined = undefined;
 
+  // Determine which value to use for generating children (the "new" structure)
   const targetForChildren = value !== undefined ? value : oldValue;
   
   if (isArr || isObj) {
-     if (type === DiffType.ADDED || type === DiffType.REMOVED) {
-       children = convertRawToNodeTree(targetForChildren, type);
+     if (type === DiffType.ADDED) {
+       children = convertRawToNodeTree(targetForChildren, DiffType.ADDED);
+     } else if (type === DiffType.REMOVED) {
+       children = convertRawToNodeTree(targetForChildren, DiffType.REMOVED);
+     } else if (type === DiffType.MODIFIED && value !== undefined && typeof value === 'object') {
+       // IMPORTANT: For modified objects (e.g. primitive -> object), we need children to inspect the new object.
+       // We mark them as ADDED so they appear green (new content).
+       children = convertRawToNodeTree(value, DiffType.ADDED);
      }
   }
 

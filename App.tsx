@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { 
   GitBranch, 
   ArrowLeftRight, 
@@ -22,7 +22,10 @@ import {
   Pin,
   PinOff,
   FileDiff,
-  Copy
+  Copy,
+  ListFilter,
+  Edit2,
+  X
 } from 'lucide-react';
 import { Button, Card, Modal, Input, Label, Select } from './components/ui';
 import JsonTree from './components/JsonTree';
@@ -47,6 +50,106 @@ const DEFAULT_WORKSPACE: Workspace = {
     currentJson: INITIAL_JSON_DATA,
     lastModified: Date.now()
 };
+
+// --- Minimap Component ---
+const DiffMinimap: React.FC<{ scrollContainerRef: React.RefObject<HTMLDivElement | null>; triggerUpdate: any }> = ({ scrollContainerRef, triggerUpdate }) => {
+    const [marks, setMarks] = useState<{ top: number; height: number; type: string }[]>([]);
+
+    useEffect(() => {
+        const updateMarks = () => {
+            const container = scrollContainerRef.current;
+            if (!container) return;
+
+            // Use getBoundingClientRect for accuracy relative to the viewport/container
+            const containerRect = container.getBoundingClientRect();
+            const scrollHeight = container.scrollHeight;
+            const scrollTop = container.scrollTop;
+            
+            if (scrollHeight === 0) return;
+
+            const elements = container.querySelectorAll('[data-diff-status]');
+            const newMarks: typeof marks = [];
+
+            elements.forEach((el) => {
+                const htmlEl = el as HTMLElement;
+                const rect = htmlEl.getBoundingClientRect();
+                
+                // Calculate position relative to the top of the SCROLLABLE content
+                // absoluteTop = (currentVisualTop - containerVisualTop) + containerScrollTop
+                const relativeTop = (rect.top - containerRect.top) + scrollTop;
+                
+                const topPercent = (relativeTop / scrollHeight) * 100;
+                const heightPercent = (rect.height / scrollHeight) * 100;
+                
+                newMarks.push({
+                    top: topPercent,
+                    height: heightPercent,
+                    type: htmlEl.dataset.diffStatus || 'modified'
+                });
+            });
+
+            setMarks(newMarks);
+        };
+
+        // Update initially and when trigger changes (tree expands/collapses)
+        const timeout = setTimeout(updateMarks, 300); // Small delay for rendering/layout
+
+        // Also observe DOM mutations for robust updates (e.g. expanding nodes)
+        const observer = new MutationObserver(updateMarks);
+        if (scrollContainerRef.current) {
+            observer.observe(scrollContainerRef.current, { childList: true, subtree: true, attributes: true });
+        }
+        
+        // Listen to window resize
+        window.addEventListener('resize', updateMarks);
+
+        return () => {
+            clearTimeout(timeout);
+            observer.disconnect();
+            window.removeEventListener('resize', updateMarks);
+        };
+    }, [scrollContainerRef, triggerUpdate]);
+
+    const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+        const container = scrollContainerRef.current;
+        if (!container) return;
+
+        const rect = e.currentTarget.getBoundingClientRect();
+        const clickY = e.clientY - rect.top;
+        const percentage = clickY / rect.height;
+
+        // Map percentage to scroll range (0 to scrollHeight - clientHeight)
+        const targetTop = percentage * (container.scrollHeight - container.clientHeight);
+
+        container.scrollTo({
+            top: targetTop,
+            behavior: 'smooth'
+        });
+    };
+
+    return (
+        <div 
+            onClick={handleClick}
+            className="absolute top-0 right-0 bottom-0 w-3.5 z-20 cursor-pointer bg-transparent border-l border-zinc-100/50 hover:bg-zinc-100/30 transition-colors"
+        >
+            {marks.map((mark, i) => (
+                <div 
+                    key={i}
+                    className={`absolute right-0 w-full opacity-80 pointer-events-none ${
+                        mark.type === 'added' ? 'bg-emerald-500' : 
+                        mark.type === 'removed' ? 'bg-rose-500' : 'bg-blue-500'
+                    }`}
+                    style={{
+                        top: `${mark.top}%`,
+                        height: `${Math.max(mark.height, 0.5)}%`, // Ensure minimal visibility even for small items
+                        minHeight: '2px'
+                    }}
+                />
+            ))}
+        </div>
+    );
+};
+
 
 const App: React.FC = () => {
   // --- Workspace State & Persistence ---
@@ -76,6 +179,10 @@ const App: React.FC = () => {
   const [sidebarPinned, setSidebarPinned] = useState(true);
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const isSidebarVisible = sidebarPinned || sidebarHovered;
+  
+  // Workspace Renaming State
+  const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
 
   // --- Local Editor State (Synced with Active Workspace) ---
   const [currentText, setCurrentText] = useState<string>(JSON.stringify(activeWorkspace.currentJson, null, 2));
@@ -111,13 +218,17 @@ const App: React.FC = () => {
 
   // Layout State
   const [expandAllKey, setExpandAllKey] = useState(0);
-  const [defaultOpen, setDefaultOpen] = useState(true);
+  // Default to 'smart' to satisfy user preference for optimization
+  const [diffExpandMode, setDiffExpandMode] = useState<'all' | 'none' | 'smart'>('smart');
+  const [editorExpandAll, setEditorExpandAll] = useState(true);
+
   const [leftPanelWidth, setLeftPanelWidth] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
   
   // Refs
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const diffScrollRef = useRef<HTMLDivElement>(null);
   const [cursorPos, setCursorPos] = useState<number | null>(null);
 
   // --- PERFORMANCE: Debounce Text Changes ---
@@ -165,14 +276,42 @@ const App: React.FC = () => {
 
   const handleDeleteWorkspace = (id: string, e: React.MouseEvent) => {
       e.stopPropagation();
-      if(workspaces.length <= 1) return; // Prevent deleting last one
-      
-      const newWorkspaces = workspaces.filter(w => w.id !== id);
-      setWorkspaces(newWorkspaces);
-      
-      if(activeWorkspaceId === id) {
-          setActiveWorkspaceId(newWorkspaces[0].id);
+      if(workspaces.length <= 1) {
+          alert("Cannot delete the only project.");
+          return;
       }
+      
+      if(window.confirm("Are you sure you want to delete this project? This action cannot be undone.")) {
+          const newWorkspaces = workspaces.filter(w => w.id !== id);
+          setWorkspaces(newWorkspaces);
+          
+          if(activeWorkspaceId === id) {
+              setActiveWorkspaceId(newWorkspaces[0].id);
+          }
+      }
+  };
+
+  const startRenaming = (ws: Workspace, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setEditingWorkspaceId(ws.id);
+      setEditName(ws.name);
+  };
+
+  const cancelRename = (e?: React.MouseEvent) => {
+      e?.stopPropagation();
+      setEditingWorkspaceId(null);
+      setEditName("");
+  };
+
+  const saveRename = (e?: React.MouseEvent) => {
+      e?.stopPropagation();
+      if (editingWorkspaceId && editName.trim()) {
+          setWorkspaces(prev => prev.map(w => 
+              w.id === editingWorkspaceId ? { ...w, name: editName.trim() } : w
+          ));
+      }
+      setEditingWorkspaceId(null);
+      setEditName("");
   };
 
   // --- Logic Handlers ---
@@ -208,12 +347,19 @@ const App: React.FC = () => {
   };
 
   const handleExpandAll = () => {
-      setDefaultOpen(true);
+      setEditorExpandAll(true);
+      setDiffExpandMode('all');
       setExpandAllKey(k => k + 1);
   };
 
   const handleCollapseAll = () => {
-      setDefaultOpen(false);
+      setEditorExpandAll(false);
+      setDiffExpandMode('none');
+      setExpandAllKey(k => k + 1);
+  };
+
+  const handleSmartExpand = () => {
+      setDiffExpandMode('smart');
       setExpandAllKey(k => k + 1);
   };
 
@@ -450,19 +596,60 @@ const App: React.FC = () => {
                    
                    <div className="space-y-1">
                        {workspaces.map(ws => (
-                           <button 
+                           <div 
                                key={ws.id}
-                               onClick={() => setActiveWorkspaceId(ws.id)}
-                               className={`w-full flex items-center gap-3 p-2 rounded-md transition-all group ${activeWorkspaceId === ws.id ? 'bg-zinc-100 shadow-hard-sm border-2 border-black' : 'hover:bg-zinc-50 border-2 border-transparent'}`}
+                               onClick={() => !editingWorkspaceId && setActiveWorkspaceId(ws.id)}
+                               className={`w-full flex items-center gap-3 p-2 rounded-md transition-all group cursor-pointer ${activeWorkspaceId === ws.id ? 'bg-zinc-100 shadow-hard-sm border-2 border-black' : 'hover:bg-zinc-50 border-2 border-transparent'}`}
                                title={ws.name}
                            >
                                <div className="shrink-0 text-zinc-500 group-hover:text-black">
                                    <FolderOpen size={18} />
                                </div>
-                               <span className={`text-sm font-bold truncate ${isSidebarVisible ? 'opacity-100' : 'opacity-0 w-0'}`}>
-                                   {ws.name}
-                               </span>
-                           </button>
+                               
+                               <div className={`flex-1 min-w-0 flex items-center justify-between ${isSidebarVisible ? 'opacity-100' : 'opacity-0 w-0'} transition-opacity overflow-hidden`}>
+                                   {editingWorkspaceId === ws.id ? (
+                                       <div className="flex items-center gap-1 w-full" onClick={e => e.stopPropagation()}>
+                                            <input 
+                                                className="w-full min-w-0 bg-white border-b border-black text-sm px-1 focus:outline-none"
+                                                value={editName}
+                                                onChange={e => setEditName(e.target.value)}
+                                                onKeyDown={e => {
+                                                    if(e.key === 'Enter') saveRename(e as any);
+                                                    if(e.key === 'Escape') cancelRename(e as any);
+                                                }}
+                                                onClick={e => e.stopPropagation()}
+                                                autoFocus
+                                            />
+                                            <button onClick={(e) => saveRename(e)} className="text-emerald-600 hover:bg-emerald-100 p-0.5 rounded"><Check size={14}/></button>
+                                            <button onClick={(e) => cancelRename(e)} className="text-rose-600 hover:bg-rose-100 p-0.5 rounded"><X size={14}/></button>
+                                       </div>
+                                   ) : (
+                                       <>
+                                           <span className="text-sm font-bold truncate pr-2 select-none">
+                                               {ws.name}
+                                           </span>
+                                           
+                                           {/* Actions: Visible on group hover */}
+                                           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                               <button 
+                                                   onClick={(e) => startRenaming(ws, e)}
+                                                   className="p-1 text-zinc-400 hover:text-black hover:bg-zinc-200 rounded"
+                                                   title="Rename"
+                                               >
+                                                   <Edit2 size={12} />
+                                               </button>
+                                               <button 
+                                                   onClick={(e) => handleDeleteWorkspace(ws.id, e)}
+                                                   className="p-1 text-zinc-400 hover:text-rose-600 hover:bg-rose-100 rounded"
+                                                   title="Delete"
+                                               >
+                                                   <Trash2 size={12} />
+                                               </button>
+                                           </div>
+                                       </>
+                                   )}
+                               </div>
+                           </div>
                        ))}
                    </div>
                </div>
@@ -520,6 +707,11 @@ const App: React.FC = () => {
                 <Button onClick={handleCollapseAll} variant="secondary" className="px-3" title="Collapse All">
                     <Minimize2 size={16} />
                 </Button>
+                {isInitialized && (
+                     <Button onClick={handleSmartExpand} variant={diffExpandMode === 'smart' ? 'primary' : 'secondary'} className="px-3" title="Smart Expand (Show Changes Only)">
+                        <ListFilter size={16} />
+                    </Button>
+                )}
 
                 <div className="w-[1px] h-6 bg-zinc-300 mx-2"></div>
 
@@ -555,42 +747,49 @@ const App: React.FC = () => {
                       {isInitialized && <span className="text-xs font-mono text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded">MODIFIED</span>}
                    </div>
                    
-                   <div className="flex bg-white border-2 border-black shadow-sm">
-                       <button 
-                          onClick={() => setEditorView('text')}
-                          className={`px-3 py-1 text-xs font-bold flex items-center gap-1 transition-colors ${editorView === 'text' ? 'bg-black text-white' : 'hover:bg-zinc-100 text-zinc-600'}`}
-                       >
-                          <Code size={14} /> TEXT
-                       </button>
-                       <button 
-                          onClick={() => setEditorView('tree')}
-                          className={`px-3 py-1 text-xs font-bold flex items-center gap-1 transition-colors ${editorView === 'tree' ? 'bg-black text-white' : 'hover:bg-zinc-100 text-zinc-600'}`}
-                       >
-                          <LayoutList size={14} /> TREE
-                       </button>
+                   <div className="flex items-center gap-2">
+                       {/* Editor Controls */}
+                       <div className="flex items-center gap-2 mr-2 border-r pr-2 border-zinc-200">
+                           <button 
+                              onClick={handleCopyJson} 
+                              className={`p-1.5 rounded-md border shadow-sm transition-all flex items-center gap-1 ${copyFeedback ? 'bg-emerald-100 border-emerald-500 text-emerald-700' : 'bg-white hover:bg-zinc-100 border-zinc-300 text-zinc-700'}`}
+                              title="Copy JSON content"
+                           >
+                              {copyFeedback ? <Check size={14} /> : <Copy size={14} />}
+                              <span className="text-xs font-bold hidden xl:inline">Copy</span>
+                           </button>
+
+                           {editorView === 'text' && (
+                               <button 
+                                  onClick={formatJson} 
+                                  className="bg-white hover:bg-zinc-100 text-zinc-700 p-1.5 rounded-md border border-zinc-300 shadow-sm transition-all flex items-center gap-1"
+                                  title="Format JSON"
+                               >
+                                  <Wand2 size={14} />
+                                  <span className="text-xs font-bold hidden xl:inline">Format</span>
+                               </button>
+                           )}
+                       </div>
+
+                       <div className="flex bg-white border-2 border-black shadow-sm rounded-sm overflow-hidden">
+                           <button 
+                              onClick={() => setEditorView('text')}
+                              className={`px-3 py-1 text-xs font-bold flex items-center gap-1 transition-colors ${editorView === 'text' ? 'bg-black text-white' : 'hover:bg-zinc-100 text-zinc-600'}`}
+                           >
+                              <Code size={14} /> TEXT
+                           </button>
+                           <button 
+                              onClick={() => setEditorView('tree')}
+                              className={`px-3 py-1 text-xs font-bold flex items-center gap-1 transition-colors ${editorView === 'tree' ? 'bg-black text-white' : 'hover:bg-zinc-100 text-zinc-600'}`}
+                           >
+                              <LayoutList size={14} /> TREE
+                           </button>
+                       </div>
                    </div>
                 </div>
 
                 <Card className="flex-1 bg-white relative min-h-0">
-                   {editorView === 'text' && (
-                      <div className="absolute top-4 right-6 z-10 flex gap-2">
-                         <button 
-                            onClick={handleCopyJson} 
-                            className={`p-2 rounded-full border shadow-sm transition-all hover:scale-105 flex items-center gap-1 ${copyFeedback ? 'bg-emerald-100 border-emerald-500 text-emerald-700' : 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-600'}`}
-                            title="Copy JSON"
-                         >
-                            {copyFeedback ? <Check size={16} /> : <Copy size={16} />}
-                         </button>
-
-                         <button 
-                            onClick={formatJson} 
-                            className="bg-zinc-100 hover:bg-zinc-200 text-zinc-600 p-2 rounded-full border border-zinc-300 shadow-sm transition-transform hover:scale-105"
-                            title="Format JSON"
-                         >
-                            <Wand2 size={16} />
-                         </button>
-                      </div>
-                   )}
+                   {/* Removed Floating controls, now in header */}
 
                    {error && (
                       <div className="absolute bottom-0 left-0 right-0 bg-rose-50 border-t-2 border-rose-400 text-rose-900 px-4 py-3 text-xs font-bold z-20 flex items-center gap-2 shadow-lg">
@@ -622,7 +821,7 @@ const App: React.FC = () => {
                                       data={activeWorkspace.currentJson} 
                                       onChange={handleObjectChange}
                                       isRoot={true}
-                                      defaultOpen={defaultOpen}
+                                      defaultOpen={editorExpandAll}
                                       path="#"
                                    />
                                 ) : (
@@ -656,22 +855,22 @@ const App: React.FC = () => {
                     
                     {isInitialized && (
                         <div className="flex gap-2">
-                            <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100">+{stats.added}</span>
-                            <span className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded border border-rose-100">-{stats.removed}</span>
-                            <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100">~{stats.modified}</span>
+                            <span title="Total Added Lines" className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100">+{stats.added}</span>
+                            <span title="Total Removed Lines" className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded border border-rose-100">-{stats.removed}</span>
+                            <span title="Total Modified Fields" className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100">~{stats.modified}</span>
                         </div>
                     )}
                  </div>
 
-                 <Card className="flex-1 bg-white min-h-0">
-                     <div className="absolute inset-0 overflow-auto p-4">
+                 <Card className="flex-1 bg-white min-h-0 relative">
+                     <div ref={diffScrollRef} className="absolute inset-0 overflow-auto p-4 pr-6 scroll-smooth">
                         {isInitialized && activeWorkspace.baseJson ? (
                             diffTree ? (
                                <JsonTree 
                                   key={`diff-${expandAllKey}`} 
                                   data={diffTree} 
                                   isRoot={true} 
-                                  defaultOpen={defaultOpen} 
+                                  expandMode={diffExpandMode}
                                />
                             ) : (
                                <div className="flex flex-col items-center justify-center h-full text-zinc-400">
@@ -690,6 +889,10 @@ const App: React.FC = () => {
                             </div>
                         )}
                      </div>
+                     {/* OVERVIEW RULER (MINIMAP) */}
+                     {isInitialized && (
+                         <DiffMinimap scrollContainerRef={diffScrollRef} triggerUpdate={diffTree} />
+                     )}
                  </Card>
              </div>
           </main>
