@@ -26,12 +26,20 @@ export type ViewMode = 'split' | 'diff';
 
 // --- New Types for Workspace & Export ---
 
+export interface Snapshot {
+    id: string;
+    name: string;
+    timestamp: number;
+    data: any;
+}
+
 export interface Workspace {
     id: string;
     name: string;
     baseJson: any | null; // The "Original"
     currentJson: any;     // The "Modified"
     lastModified: number;
+    snapshots: Snapshot[];
 }
 
 export type ExportMode = 'latest' | 'diff' | 'project';

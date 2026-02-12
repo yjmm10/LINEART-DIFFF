@@ -5,7 +5,7 @@ import { useSync } from './SyncContext';
 
 // --- Mutation Context (For Global Moves) ---
 interface JsonMutationContextType {
-    handleGlobalMove: (fromPath: string, toPath: string, position: 'before' | 'after' | 'inside') => void;
+    handleGlobalMove: (fromPath: string, toPath: string, position: 'before' | 'after' | 'inside', operation: 'move' | 'copy') => void;
 }
 
 const JsonMutationContext = createContext<JsonMutationContextType | null>(null);
@@ -51,7 +51,7 @@ interface JsonEditorProps {
   defaultOpen?: boolean;
   path?: string; 
   index?: number;
-  onFocusPath?: (path: string) => void; // Added Prop
+  onFocusPath?: (path: string) => void; 
 }
 
 const getDataType = (data: any): 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null' => {
@@ -73,7 +73,11 @@ const getInitialValue = (type: string) => {
 };
 
 const TypeSelector = ({ onSelect, onCancel }: { onSelect: (t: string) => void, onCancel: () => void }) => (
-  <div className="flex items-center gap-0.5 bg-white border border-zinc-900 rounded shadow-hard-sm absolute z-20 left-0 -top-8 p-1 animate-in fade-in zoom-in-95 duration-100 origin-bottom-left">
+  <div 
+    className="flex items-center gap-0.5 bg-white border border-zinc-900 rounded shadow-hard-sm absolute z-50 right-0 -top-9 p-1 animate-in fade-in zoom-in-95 duration-100 origin-bottom-right whitespace-nowrap"
+    onMouseDown={(e) => e.stopPropagation()}
+    onClick={(e) => e.stopPropagation()}
+  >
       <button onClick={() => onSelect('object')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-zinc-900 border border-zinc-200 rounded-sm transition-colors" title="Object">Dict</button>
       <button onClick={() => onSelect('array')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-zinc-900 border border-zinc-200 rounded-sm transition-colors" title="Array">List</button>
       <button onClick={() => onSelect('string')} className="px-2 py-1 text-[10px] font-bold bg-zinc-50 hover:bg-zinc-200 text-emerald-700 border border-zinc-200 rounded-sm transition-colors" title="String">Str</button>
@@ -109,6 +113,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   // DnD State
   const [isDragging, setIsDragging] = useState(false);
   const [dropState, setDropState] = useState<'none' | 'before' | 'after' | 'inside'>('none');
+  const [isCopyMode, setIsCopyMode] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   // Contexts
@@ -218,7 +223,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
 
   // --- Global Move Logic (Root Only) ---
   
-  const performGlobalMove = useCallback((fromPath: string, toPath: string, position: 'before' | 'after' | 'inside') => {
+  const performGlobalMove = useCallback((fromPath: string, toPath: string, position: 'before' | 'after' | 'inside', operation: 'move' | 'copy' = 'move') => {
       // Deep clone whole tree
       const newData = JSON.parse(JSON.stringify(data));
       
@@ -230,11 +235,13 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       const isArray = Array.isArray(fromParent);
       const val = isArray ? fromParent[Number(fromKey)] : fromParent[fromKey];
       
-      // 3. Remove Source
-      if (isArray) {
-          fromParent.splice(Number(fromKey), 1);
-      } else {
-          delete fromParent[fromKey];
+      // 3. Remove Source (Only if Moving)
+      if (operation === 'move') {
+        if (isArray) {
+            fromParent.splice(Number(fromKey), 1);
+        } else {
+            delete fromParent[fromKey];
+        }
       }
 
       // 4. Calculate Insert Target
@@ -278,9 +285,13 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
               const newEntries: [string, any][] = [];
               const insertKey = getPathParts(fromPath).pop() || 'moved_key';
               let safeKey = insertKey;
+              
+              // Ensure uniqueness in target (critical for Copy operation into same object)
               let c = 1;
-              while (Object.prototype.hasOwnProperty.call(targetParent, safeKey) && safeKey !== targetKey) { 
-                  if (fromParent === targetParent && safeKey === fromKey) break; 
+              while (Object.prototype.hasOwnProperty.call(targetParent, safeKey) && (operation === 'copy' || safeKey !== targetKey)) { 
+                  // If moving, we only care if safeKey exists and it's NOT the key we just removed (though here we are in targetParent)
+                  // If copying, we ALWAYS need a unique key if it collides.
+                  if (operation === 'move' && fromParent === targetParent && safeKey === fromKey) break; 
                   safeKey = `${insertKey}_${c++}`;
               }
 
@@ -305,7 +316,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       e.stopPropagation();
       setIsDragging(true);
       e.dataTransfer.setData('lineart/path', currentPath);
-      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.effectAllowed = 'copyMove';
       
       const preview = document.createElement('div');
       preview.innerText = `{ ${localKey || 'Item'} }`;
@@ -323,6 +334,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   const handleDragEnd = () => {
       setIsDragging(false);
       setDropState('none');
+      setIsCopyMode(false);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -330,6 +342,16 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       e.stopPropagation();
       
       if (isDragging) return; 
+
+      // Visual feedback for Copy vs Move
+      const copyMode = e.altKey;
+      if (copyMode !== isCopyMode) setIsCopyMode(copyMode);
+
+      if (e.altKey) {
+          e.dataTransfer.dropEffect = 'copy';
+      } else {
+          e.dataTransfer.dropEffect = 'move';
+      }
 
       const rect = ref.current?.getBoundingClientRect();
       if (!rect) return;
@@ -353,6 +375,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       e.preventDefault();
       e.stopPropagation();
       setDropState('none');
+      setIsCopyMode(false);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -363,10 +386,13 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       if (!fromPath) return;
       if (fromPath === currentPath) return; 
       
-      if (isRoot) performGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState);
-      else if (mutationContext) mutationContext.handleGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState);
+      const operation = e.altKey ? 'copy' : 'move';
+
+      if (isRoot) performGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState, operation);
+      else if (mutationContext) mutationContext.handleGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState, operation);
       
       setDropState('none');
+      setIsCopyMode(false);
   };
 
   const isContainer = type === 'object' || type === 'array';
@@ -398,9 +424,9 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
         onClick={handleFocus}
     >
       {/* Drop Zone Indicators */}
-      {dropState === 'before' && <div className="absolute -top-[2px] left-0 right-0 h-[4px] bg-accent rounded-full z-10 pointer-events-none" />}
-      {dropState === 'after' && <div className="absolute -bottom-[2px] left-0 right-0 h-[4px] bg-accent rounded-full z-10 pointer-events-none" />}
-      {dropState === 'inside' && <div className="absolute inset-0 bg-accent/10 border-2 border-accent rounded z-10 pointer-events-none" />}
+      {dropState === 'before' && <div className={`absolute -top-[2px] left-0 right-0 h-[4px] rounded-full z-10 pointer-events-none ${isDragging ? '' : (isCopyMode ? 'bg-emerald-500' : 'bg-accent')}`} />}
+      {dropState === 'after' && <div className={`absolute -bottom-[2px] left-0 right-0 h-[4px] rounded-full z-10 pointer-events-none ${isDragging ? '' : (isCopyMode ? 'bg-emerald-500' : 'bg-accent')}`} />}
+      {dropState === 'inside' && <div className={`absolute inset-0 border-2 rounded z-10 pointer-events-none ${isDragging ? '' : (isCopyMode ? 'bg-emerald-500/10 border-emerald-500' : 'bg-accent/10 border-accent')}`} />}
 
       <div className="flex items-center gap-2 group hover:bg-zinc-100 rounded px-1 -ml-1 transition-colors relative">
         
@@ -432,7 +458,14 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                spellCheck={false}
                onDoubleClick={(e) => e.stopPropagation()} 
              />
-             <span className="text-zinc-400">:</span>
+             <span 
+                className="text-zinc-400 cursor-pointer hover:text-accent hover:font-bold transition-colors px-0.5 select-none"
+                onClick={(e) => { 
+                    e.stopPropagation(); 
+                    syncTo('diff', currentPath); 
+                }}
+                title="Reveal in Diff View"
+             >:</span>
           </div>
         )}
 
@@ -462,11 +495,16 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                 onChange={handleValueChange}
                 spellCheck={false}
                 onDoubleClick={(e) => e.stopPropagation()}
+                title={localValue === null ? 'null' : localValue.toString()}
               />
               {isRef && (
                   <button 
-                    onClick={(e) => { e.stopPropagation(); /* jumpTo logic if needed locally */ }}
+                    onClick={(e) => { 
+                        e.stopPropagation(); 
+                        syncTo('editor', localValue); 
+                    }}
                     className="ml-2 text-zinc-400 hover:text-accent p-0.5 hover:bg-blue-50 rounded transition-colors"
+                    title="Jump to definition"
                   >
                       <ExternalLink size={12} />
                   </button>

@@ -25,14 +25,18 @@ import {
   Copy,
   ListFilter,
   Edit2,
-  X
+  X,
+  Footprints,
+  History,
+  Save,
+  Clock
 } from 'lucide-react';
 import { Button, Card, Modal, Input, Label, Select } from './components/ui';
 import JsonTree from './components/JsonTree';
 import { JsonEditor } from './components/JsonEditor';
 import { SyncProvider, useSync } from './components/SyncContext';
 import { safeParse, generateDiff, downloadJson, isProjectFile, getPathFromIndex, getIndexFromPath } from './utils';
-import { DiffNode, DiffType, Workspace, ExportMode } from './types';
+import { DiffNode, DiffType, Workspace, ExportMode, Snapshot } from './types';
 
 const INITIAL_JSON_DATA = {
   project: "LineArt JSON",
@@ -49,7 +53,8 @@ const DEFAULT_WORKSPACE: Workspace = {
     name: 'Main Project',
     baseJson: null,
     currentJson: INITIAL_JSON_DATA,
-    lastModified: Date.now()
+    lastModified: Date.now(),
+    snapshots: []
 };
 
 // --- Minimap Component ---
@@ -166,7 +171,10 @@ const ViewController = ({
     diffExpandMode,
     isInitialized,
     activePathRef,
-    textareaRef
+    textareaRef,
+    autoFollow,
+    handleCopyJson,
+    copyFeedback
 } : any) => {
 
     const { syncTo } = useSync();
@@ -198,6 +206,20 @@ const ViewController = ({
 
     const handleFocusPath = (path: string) => {
         activePathRef.current = path;
+        if (autoFollow) {
+            syncTo('diff', path);
+        }
+    };
+
+    const handleTextCursor = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+        const target = e.currentTarget;
+        const index = target.selectionStart;
+        const path = getPathFromIndex(currentText, index);
+        activePathRef.current = path;
+        
+        if (autoFollow) {
+             syncTo('diff', path);
+        }
     };
 
     return (
@@ -210,9 +232,22 @@ const ViewController = ({
                </div>
                
                <div className="flex items-center gap-2">
-                   {/* ... (Existing Copy/Format buttons, omitted for brevity but logic preserved by parent passing props or standard render) ... */}
-                   {/* Actually let's just re-render the buttons here to keep it clean */}
                     <div className="flex items-center gap-2 mr-2 border-r pr-2 border-zinc-200">
+                           <button 
+                               onClick={handleCopyJson}
+                               className={`p-1.5 rounded-md border shadow-sm transition-all flex items-center gap-1 ${
+                                   copyFeedback 
+                                   ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
+                                   : 'bg-white hover:bg-zinc-100 text-zinc-700 border-zinc-300'
+                               }`}
+                               title="Copy JSON"
+                           >
+                               {copyFeedback ? <Check size={14} /> : <Copy size={14} />}
+                               <span className="text-xs font-bold hidden xl:inline">
+                                   {copyFeedback ? 'Copied' : 'Copy'}
+                               </span>
+                           </button>
+
                            {editorView === 'text' && (
                                <button 
                                   onClick={formatJson} 
@@ -253,6 +288,8 @@ const ViewController = ({
                           onChange={(e) => handleTextChange(e.target.value)}
                           onKeyDown={handleKeyDown}
                           onBlur={formatJson}
+                          onClick={handleTextCursor}
+                          onKeyUp={handleTextCursor}
                           placeholder="Paste JSON here..."
                           spellCheck={false}
                        />
@@ -283,7 +320,12 @@ const App: React.FC = () => {
   // --- Workspace State & Persistence ---
   const [workspaces, setWorkspaces] = useState<Workspace[]>(() => {
       const saved = localStorage.getItem('lineart_workspaces');
-      return saved ? JSON.parse(saved) : [DEFAULT_WORKSPACE];
+      let parsed = saved ? JSON.parse(saved) : [DEFAULT_WORKSPACE];
+      // Migration: Ensure snapshots array exists for old data
+      if (Array.isArray(parsed)) {
+          parsed = parsed.map((w: any) => ({ ...w, snapshots: w.snapshots || [] }));
+      }
+      return parsed;
   });
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(() => {
       return localStorage.getItem('lineart_active_id') || 'default';
@@ -317,7 +359,8 @@ const App: React.FC = () => {
       setErrorLine(undefined);
   }, [activeWorkspaceId]);
 
-  const [editorView, setEditorView] = useState<'text' | 'tree'>('text');
+  const [editorView, setEditorView] = useState<'text' | 'tree'>('tree');
+  const [autoFollow, setAutoFollow] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorLine, setErrorLine] = useState<number | undefined>(undefined);
   const [copyFeedback, setCopyFeedback] = useState(false);
@@ -325,11 +368,34 @@ const App: React.FC = () => {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
+  const [isSnapshotModalOpen, setIsSnapshotModalOpen] = useState(false);
   
   const [exportFilename, setExportFilename] = useState("data");
   const [exportMode, setExportMode] = useState<ExportMode>('latest');
   
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [snapshotName, setSnapshotName] = useState("");
+  const [ioTab, setIoTab] = useState<'import' | 'export'>('export');
+  
+  // Snapshot renaming state
+  const [editingSnapshotId, setEditingSnapshotId] = useState<string | null>(null);
+  const [editSnapshotName, setEditSnapshotName] = useState("");
+
+  // Auto-generate export filename
+  useEffect(() => {
+    if (isExportModalOpen) {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hour = String(now.getHours()).padStart(2, '0');
+        const minute = String(now.getMinutes()).padStart(2, '0');
+        const timestamp = `${year}${month}${day}_${hour}${minute}`;
+        
+        const safeName = activeWorkspace.name.trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9-_]/g, '');
+        setExportFilename(`${safeName}_${timestamp}`);
+    }
+  }, [isExportModalOpen, activeWorkspace.name]);
 
   const [compareBaseFile, setCompareBaseFile] = useState<any>(null);
   const [compareCurrentFile, setCompareCurrentFile] = useState<any>(null);
@@ -382,7 +448,8 @@ const App: React.FC = () => {
           name: newWorkspaceName,
           baseJson: null,
           currentJson: {},
-          lastModified: Date.now()
+          lastModified: Date.now(),
+          snapshots: []
       };
       setWorkspaces([...workspaces, newSpace]);
       setActiveWorkspaceId(newSpace.id);
@@ -429,6 +496,62 @@ const App: React.FC = () => {
       setEditingWorkspaceId(null);
       setEditName("");
   };
+
+  // --- Snapshot Actions ---
+  
+  const handleCreateSnapshot = () => {
+      const newSnapshot: Snapshot = {
+          id: Date.now().toString(),
+          name: snapshotName.trim() || `Snapshot #${(activeWorkspace.snapshots?.length || 0) + 1}`,
+          timestamp: Date.now(),
+          data: JSON.parse(JSON.stringify(activeWorkspace.currentJson))
+      };
+      
+      updateActiveWorkspace({
+          snapshots: [newSnapshot, ...(activeWorkspace.snapshots || [])]
+      });
+      setSnapshotName("");
+      setIsSnapshotModalOpen(false); // Close modal on save
+  };
+
+  const handleRestoreSnapshot = (snapshot: Snapshot) => {
+      if (window.confirm(`Restore snapshot "${snapshot.name}"? Current unsaved changes will be lost.`)) {
+          updateActiveWorkspace({ currentJson: JSON.parse(JSON.stringify(snapshot.data)) });
+          setCurrentText(JSON.stringify(snapshot.data, null, 2));
+          setIsSnapshotModalOpen(false);
+      }
+  };
+
+  const handleDeleteSnapshot = (id: string) => {
+      if (window.confirm("Delete this snapshot?")) {
+          updateActiveWorkspace({
+              snapshots: activeWorkspace.snapshots.filter(s => s.id !== id)
+          });
+      }
+  };
+
+  const startSnapshotRenaming = (snap: Snapshot) => {
+      setEditingSnapshotId(snap.id);
+      setEditSnapshotName(snap.name);
+  };
+
+  const cancelSnapshotRename = () => {
+      setEditingSnapshotId(null);
+      setEditSnapshotName("");
+  };
+
+  const saveSnapshotRename = () => {
+      if (editingSnapshotId && editSnapshotName.trim()) {
+          updateActiveWorkspace({
+              snapshots: activeWorkspace.snapshots.map(s => 
+                  s.id === editingSnapshotId ? { ...s, name: editSnapshotName.trim() } : s
+              )
+          });
+      }
+      setEditingSnapshotId(null);
+      setEditSnapshotName("");
+  };
+
 
   // --- Logic Handlers ---
 
@@ -481,11 +604,13 @@ const App: React.FC = () => {
   // --- Import / Export ---
 
   const handleExport = () => {
+      const baseName = exportFilename;
+      
       if(exportMode === 'latest') {
-          downloadJson(activeWorkspace.currentJson, exportFilename);
+          downloadJson(activeWorkspace.currentJson, `${baseName}_new`);
       } else if (exportMode === 'diff') {
           const diff = generateDiff(activeWorkspace.baseJson, activeWorkspace.currentJson);
-          downloadJson(diff, `${exportFilename}-diff`);
+          downloadJson(diff, `${baseName}_diff`);
       } else if (exportMode === 'project') {
           const projectData = {
               meta: 'lineart-diff-project',
@@ -494,7 +619,7 @@ const App: React.FC = () => {
               base: activeWorkspace.baseJson,
               current: activeWorkspace.currentJson
           };
-          downloadJson(projectData, `${exportFilename}-project`);
+          downloadJson(projectData, `${baseName}_full`);
       }
       setIsExportModalOpen(false);
   };
@@ -524,6 +649,7 @@ const App: React.FC = () => {
             }
             setError(null);
             setErrorLine(undefined);
+            setIsExportModalOpen(false); // Close modal on success
         } else {
             setError("Invalid JSON File");
         }
@@ -811,6 +937,22 @@ const App: React.FC = () => {
 
                 <div className="w-[1px] h-6 bg-zinc-300 mx-2"></div>
 
+                 {/* SNAPSHOTS BUTTON */}
+                 <Button 
+                    variant="secondary" 
+                    onClick={() => setIsSnapshotModalOpen(true)}
+                    icon={<History size={16} />}
+                    title="Snapshots"
+                    className="relative"
+                 >
+                     <span className="hidden sm:inline">Snapshots</span>
+                     {(activeWorkspace.snapshots?.length || 0) > 0 && (
+                         <span className="absolute -top-2 -right-2 w-5 h-5 bg-black text-white rounded-full text-[10px] flex items-center justify-center border border-white">
+                             {activeWorkspace.snapshots.length}
+                         </span>
+                     )}
+                 </Button>
+
                 {!isInitialized ? (
                     <Button onClick={handleSetOriginal} icon={<ArrowLeftRight size={16}/>} className="whitespace-nowrap">
                        Set as Original
@@ -857,6 +999,9 @@ const App: React.FC = () => {
                         isInitialized={isInitialized}
                         activePathRef={activePathRef}
                         textareaRef={textareaRef}
+                        autoFollow={autoFollow}
+                        handleCopyJson={handleCopyJson}
+                        copyFeedback={copyFeedback}
                     />
                 </div>
 
@@ -875,6 +1020,21 @@ const App: React.FC = () => {
                             <ArrowLeftRight className="text-emerald-600" /> Diff
                         </h2>
                         {isInitialized && <span className="text-xs font-mono text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded">DIFF VIEW</span>}
+                        
+                         {isInitialized && (
+                            <button 
+                                onClick={() => setAutoFollow(!autoFollow)}
+                                className={`flex items-center gap-1.5 px-2 py-1 ml-2 rounded text-[10px] uppercase font-bold border transition-colors ${
+                                    autoFollow 
+                                    ? 'bg-blue-50 text-blue-600 border-blue-200' 
+                                    : 'bg-white text-zinc-400 border-zinc-200 hover:border-zinc-300 hover:text-zinc-600'
+                                }`}
+                                title="Automatically scroll Diff View when navigating Editor"
+                            >
+                                <div className={`w-1.5 h-1.5 rounded-full ${autoFollow ? 'bg-blue-500 animate-pulse' : 'bg-zinc-300'}`} />
+                                Auto Follow
+                            </button>
+                        )}
                         </div>
                         
                         {isInitialized && (
@@ -925,59 +1085,177 @@ const App: React.FC = () => {
       </div>
 
       <Modal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} title="Import / Export">
-          <div className="space-y-6">
-              
-              <div className="bg-zinc-50 p-4 border border-zinc-200 rounded">
-                  <Label>Import File</Label>
-                  <label className="cursor-pointer flex items-center justify-center gap-2 bg-white border-2 border-dashed border-zinc-300 hover:border-black p-4 mt-2 transition-colors rounded">
-                      <Upload size={20} className="text-zinc-400" />
-                      <span className="font-bold text-sm text-zinc-600">Click to Upload JSON</span>
-                      <input type="file" accept=".json" onChange={handleFileUpload} className="hidden" />
-                  </label>
-                  <p className="text-[10px] text-zinc-400 mt-2">Supports raw JSON or LineArt Project files.</p>
-              </div>
+          {/* Tab Navigation */}
+          <div className="flex border-b border-zinc-200 mb-6">
+              <button 
+                onClick={() => setIoTab('import')}
+                className={`flex-1 pb-2 text-sm font-bold uppercase tracking-wide transition-colors ${ioTab === 'import' ? 'border-b-2 border-black text-black' : 'text-zinc-400 hover:text-zinc-600'}`}
+              >
+                Import
+              </button>
+              <button 
+                onClick={() => setIoTab('export')}
+                className={`flex-1 pb-2 text-sm font-bold uppercase tracking-wide transition-colors ${ioTab === 'export' ? 'border-b-2 border-black text-black' : 'text-zinc-400 hover:text-zinc-600'}`}
+              >
+                Export
+              </button>
+          </div>
 
-              <div className="border-t border-zinc-200"></div>
+          <div className="min-h-[200px]">
+              {ioTab === 'import' ? (
+                  <div className="space-y-4 animate-in fade-in slide-in-from-left-2 duration-200">
+                     <div className="bg-zinc-50 p-6 border border-zinc-200 rounded text-center">
+                        <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-sm border border-zinc-100">
+                            <Upload size={24} className="text-zinc-400" />
+                        </div>
+                        <Label className="text-center mb-2">Upload JSON File</Label>
+                        <p className="text-xs text-zinc-400 mb-4 max-w-[200px] mx-auto">
+                            Supports standard .json files or LineArt Project snapshots.
+                        </p>
+                        <label className="inline-flex">
+                            <span className="cursor-pointer bg-black text-white px-4 py-2 text-sm font-bold rounded shadow-hard-sm hover:translate-y-0.5 hover:translate-x-0.5 hover:shadow-none transition-all flex items-center gap-2">
+                                <FolderOpen size={16} /> Choose File
+                            </span>
+                            <input type="file" accept=".json" onChange={handleFileUpload} className="hidden" />
+                        </label>
+                    </div>
+                  </div>
+              ) : (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-right-2 duration-200">
+                     <div>
+                        <Label>Filename</Label>
+                        <div className="flex items-center gap-2 mt-2">
+                             <Input 
+                                value={exportFilename} 
+                                onChange={(e) => setExportFilename(e.target.value)}
+                                placeholder="my-data"
+                                className="font-mono"
+                            />
+                            <div className="px-3 py-2 bg-zinc-100 border-2 border-zinc-200 text-zinc-500 text-sm font-bold rounded">.json</div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-2">
+                         <Label>Export Type</Label>
+                         <label className="flex items-start gap-3 p-3 border border-zinc-200 rounded cursor-pointer hover:bg-zinc-50 transition-colors">
+                            <input type="radio" name="mode" className="mt-1" checked={exportMode === 'latest'} onChange={() => setExportMode('latest')} />
+                            <div>
+                                <div className="font-bold text-sm">Latest Result Only</div>
+                                <div className="text-xs text-zinc-500">Exports current JSON state.</div>
+                            </div>
+                         </label>
+                      
+                         <label className="flex items-start gap-3 p-3 border border-zinc-200 rounded cursor-pointer hover:bg-zinc-50 transition-colors">
+                            <input type="radio" name="mode" className="mt-1" checked={exportMode === 'diff'} onChange={() => setExportMode('diff')} />
+                            <div>
+                                <div className="font-bold text-sm">Diff Result Structure</div>
+                                <div className="text-xs text-zinc-500">Exports computed difference tree.</div>
+                            </div>
+                         </label>
+
+                         <label className="flex items-start gap-3 p-3 border border-zinc-200 rounded cursor-pointer hover:bg-zinc-50 transition-colors">
+                            <input type="radio" name="mode" className="mt-1" checked={exportMode === 'project'} onChange={() => setExportMode('project')} />
+                            <div>
+                                <div className="font-bold text-sm">Full Project Snapshot</div>
+                                <div className="text-xs text-zinc-500">Exports Original + Modified versions.</div>
+                            </div>
+                         </label>
+                    </div>
+                    <Button onClick={handleExport} icon={<Download size={16}/>} className="w-full">Download JSON</Button>
+                </div>
+              )}
+          </div>
+      </Modal>
+
+       {/* --- SNAPSHOT MODAL --- */}
+       <Modal isOpen={isSnapshotModalOpen} onClose={() => setIsSnapshotModalOpen(false)} title="Project Snapshots">
+          <div className="space-y-6">
+              <div className="bg-zinc-50 p-4 border border-zinc-200 rounded">
+                  <Label>Create Snapshot</Label>
+                  <div className="flex gap-2 mt-2">
+                      <Input 
+                          placeholder="Snapshot Name (optional)" 
+                          value={snapshotName}
+                          onChange={(e) => setSnapshotName(e.target.value)}
+                          onKeyDown={(e) => {
+                             if(e.key === 'Enter') handleCreateSnapshot();
+                          }}
+                      />
+                      <Button onClick={handleCreateSnapshot} icon={<Save size={16} />}>
+                          Save
+                      </Button>
+                  </div>
+              </div>
 
               <div>
-                  <Label>Export Data</Label>
-                  <div className="mt-2 mb-4">
-                    <Input 
-                        value={exportFilename} 
-                        onChange={(e) => setExportFilename(e.target.value)}
-                        placeholder="Filename..."
-                    />
+                  <div className="flex justify-between items-center mb-2">
+                      <Label>History</Label>
+                      <span className="text-[10px] text-zinc-400 uppercase font-bold">{activeWorkspace.snapshots?.length || 0} Snapshots</span>
                   </div>
-
-                  <div className="space-y-2">
-                      <label className="flex items-start gap-3 p-3 border border-zinc-200 rounded cursor-pointer hover:bg-zinc-50">
-                          <input type="radio" name="mode" className="mt-1" checked={exportMode === 'latest'} onChange={() => setExportMode('latest')} />
-                          <div>
-                              <div className="font-bold text-sm">Latest Result Only</div>
-                              <div className="text-xs text-zinc-500">Exports current JSON state.</div>
+                  
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                      {(!activeWorkspace.snapshots || activeWorkspace.snapshots.length === 0) && (
+                          <div className="text-center py-8 text-zinc-400 text-sm border-2 border-dashed border-zinc-200 rounded">
+                              No snapshots saved yet.
                           </div>
-                      </label>
+                      )}
                       
-                      <label className="flex items-start gap-3 p-3 border border-zinc-200 rounded cursor-pointer hover:bg-zinc-50">
-                          <input type="radio" name="mode" className="mt-1" checked={exportMode === 'diff'} onChange={() => setExportMode('diff')} />
-                          <div>
-                              <div className="font-bold text-sm">Diff Result Structure</div>
-                              <div className="text-xs text-zinc-500">Exports computed difference tree.</div>
+                      {activeWorkspace.snapshots?.map(snap => (
+                          <div key={snap.id} className="group flex justify-between items-center p-3 border border-zinc-200 rounded hover:bg-zinc-50 transition-colors bg-white">
+                              <div className="min-w-0 flex-1 mr-2">
+                                  {editingSnapshotId === snap.id ? (
+                                      <div className="flex items-center gap-1 w-full" onClick={e => e.stopPropagation()}>
+                                          <input 
+                                              className="w-full min-w-0 bg-white border-b border-black text-sm px-1 focus:outline-none"
+                                              value={editSnapshotName}
+                                              onChange={e => setEditSnapshotName(e.target.value)}
+                                              onKeyDown={e => {
+                                                  if(e.key === 'Enter') saveSnapshotRename();
+                                                  if(e.key === 'Escape') cancelSnapshotRename();
+                                              }}
+                                              autoFocus
+                                          />
+                                          <button onClick={saveSnapshotRename} className="text-emerald-600 hover:bg-emerald-100 p-0.5 rounded"><Check size={14}/></button>
+                                          <button onClick={cancelSnapshotRename} className="text-rose-600 hover:bg-rose-100 p-0.5 rounded"><X size={14}/></button>
+                                      </div>
+                                  ) : (
+                                      <>
+                                          <div className="font-bold text-sm truncate pr-2" title={snap.name}>{snap.name}</div>
+                                          <div className="flex items-center gap-1 text-[10px] text-zinc-400">
+                                              <Clock size={10} />
+                                              {new Date(snap.timestamp).toLocaleString()}
+                                          </div>
+                                      </>
+                                  )}
+                              </div>
+                              <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  {editingSnapshotId !== snap.id && (
+                                    <button 
+                                        onClick={() => startSnapshotRenaming(snap)}
+                                        className="p-1.5 text-zinc-500 bg-zinc-50 hover:bg-zinc-100 rounded border border-zinc-200"
+                                        title="Rename"
+                                    >
+                                        <Edit2 size={14} />
+                                    </button>
+                                  )}
+                                  <button 
+                                      onClick={() => handleRestoreSnapshot(snap)}
+                                      className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200"
+                                      title="Restore"
+                                  >
+                                      <RotateCcw size={14} />
+                                  </button>
+                                  <button 
+                                      onClick={() => handleDeleteSnapshot(snap.id)}
+                                      className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded border border-rose-200"
+                                      title="Delete"
+                                  >
+                                      <Trash2 size={14} />
+                                  </button>
+                              </div>
                           </div>
-                      </label>
-
-                      <label className="flex items-start gap-3 p-3 border border-zinc-200 rounded cursor-pointer hover:bg-zinc-50">
-                          <input type="radio" name="mode" className="mt-1" checked={exportMode === 'project'} onChange={() => setExportMode('project')} />
-                          <div>
-                              <div className="font-bold text-sm">Full Project Snapshot</div>
-                              <div className="text-xs text-zinc-500">Exports Original + Modified versions.</div>
-                          </div>
-                      </label>
+                      ))}
                   </div>
-              </div>
-
-              <div className="flex justify-end pt-2">
-                  <Button onClick={handleExport} icon={<Download size={16}/>}>Download</Button>
               </div>
           </div>
       </Modal>
