@@ -15,7 +15,7 @@ const translations = {
     },
     features: {
       diff: { title: "Smart Diff", desc: "Compare JSON structures with precision. Detects additions, removals, and modifications." },
-      format: { title: "Format & Validate", desc: "Instantly format messy JSON. Switch between Text and Tree views." },
+      format: { title: "Format & Validate", desc: "Instantly format messy JSON. Support for syntax highlighting and code folding in Text Mode." },
       local: { title: "Local Privacy", desc: "Data never leaves your browser. Workspaces are saved to LocalStorage." },
       snapshot: { title: "Snapshots", desc: "Save versions of your work and restore them anytime." }
     },
@@ -27,7 +27,9 @@ const translations = {
         jump: "Sync Jumping",
         jumpDesc: "Double-click any node in the Editor to reveal it in Diff View, and vice versa. Use this to quickly locate changes.",
         actions: "Quick Actions",
-        actionsDesc: "Hover over any node to access the context menu: Copy JSON, Add Child, Change Type, or Delete."
+        actionsDesc: "Hover over any node to access the context menu: Copy JSON, Add Child, Change Type, or Delete.",
+        folding: "Text Mode Folding",
+        foldingDesc: "In Text Mode, click the arrows in the gutter (line numbers) to fold/unfold objects and arrays, just like in VS Code."
       },
       shortcuts: {
         title: "Keyboard Shortcuts",
@@ -137,7 +139,7 @@ const translations = {
     },
     features: {
       diff: { title: "智能比对", desc: "精确比对 JSON 结构。自动检测新增、删除和修改的内容。" },
-      format: { title: "格式化与校验", desc: "瞬间格式化混乱的 JSON。支持文本和树形视图切换。" },
+      format: { title: "格式化与校验", desc: "瞬间格式化混乱的 JSON。文本模式支持语法高亮与代码折叠。" },
       local: { title: "本地隐私", desc: "数据仅在浏览器中处理。工作区数据保存于 LocalStorage。" },
       snapshot: { title: "快照管理", desc: "保存当前工作版本，随时一键还原。" }
     },
@@ -149,7 +151,9 @@ const translations = {
         jump: "双击定位",
         jumpDesc: "双击编辑器或差异视图中的任意节点，即可在另一侧视图中快速定位对应内容。",
         actions: "快捷菜单",
-        actionsDesc: "鼠标悬停在节点上，即可使用复制 JSON、添加子节点、类型转换或删除功能。"
+        actionsDesc: "鼠标悬停在节点上，即可使用复制 JSON、添加子节点、类型转换或删除功能。",
+        folding: "文本模式折叠",
+        foldingDesc: "在文本模式下，点击行号旁的箭头即可折叠/展开对象和数组，体验类似 VS Code。"
       },
       shortcuts: {
         title: "快捷键",

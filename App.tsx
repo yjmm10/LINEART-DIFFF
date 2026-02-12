@@ -37,7 +37,8 @@ import {
   GripVertical,
   Zap,
   Columns,
-  SquareSplitHorizontal
+  SquareSplitHorizontal,
+  FoldVertical
 } from 'lucide-react';
 import { Button, Card, Modal, Input, Label, Select } from './components/ui';
 import JsonTree from './components/JsonTree';
@@ -394,7 +395,7 @@ const EditorWorkspace: React.FC<{
   const [exportMode, setExportMode] = useState<ExportMode>('latest');
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [snapshotName, setSnapshotName] = useState("");
-  const [ioTab, setIoTab] = useState<'import' | 'export'>('export');
+  const [ioTab, setIoTab] = useState<'import' | 'export'>('import');
   
   const [editingSnapshotId, setEditingSnapshotId] = useState<string | null>(null);
   const [editSnapshotName, setEditSnapshotName] = useState("");
@@ -884,6 +885,16 @@ const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen
                      <div>
                          <h5 className="font-bold text-sm">{t('guide.tips.actions')}</h5>
                          <p className="text-xs text-zinc-500 mt-1 leading-relaxed">{t('guide.tips.actionsDesc')}</p>
+                     </div>
+                 </div>
+
+                 <div className="flex gap-4 items-start group">
+                     <div className="shrink-0 w-10 h-10 bg-white border-2 border-zinc-100 group-hover:border-indigo-500 rounded flex items-center justify-center text-zinc-400 group-hover:text-indigo-500 transition-colors shadow-sm">
+                         <FoldVertical size={20} />
+                     </div>
+                     <div>
+                         <h5 className="font-bold text-sm">{t('guide.tips.folding')}</h5>
+                         <p className="text-xs text-zinc-500 mt-1 leading-relaxed">{t('guide.tips.foldingDesc')}</p>
                      </div>
                  </div>
              </div>
