@@ -42,11 +42,13 @@ import {
 import { Button, Card, Modal, Input, Label, Select } from './components/ui';
 import JsonTree from './components/JsonTree';
 import { JsonEditor } from './components/JsonEditor';
+import CodeEditor from './components/CodeEditor';
 import { SyncProvider, useSync } from './components/SyncContext';
 import { safeParse, generateDiff, downloadJson, isProjectFile, getPathFromIndex, getIndexFromPath } from './utils';
 import { DiffNode, DiffType, Workspace, ExportMode, Snapshot } from './types';
 import { LanguageProvider, useLanguage } from './translations';
 import { LandingPage } from './components/LandingPage';
+import { EditorView } from '@uiw/react-codemirror';
 
 const INITIAL_JSON_DATA = {
   project: "LineArt JSON",
@@ -159,7 +161,10 @@ const ViewController: React.FC<ViewControllerProps> = ({
     const { syncTo } = useSync();
     const { t } = useLanguage();
     const [copyFeedback, setCopyFeedback] = useState(false);
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    
+    // Reference to the CodeMirror EditorView
+    const editorViewRef = useRef<EditorView | null>(null);
+    
     const [editorExpandAll, setEditorExpandAll] = useState(true);
 
     // Watch for global expand trigger
@@ -170,10 +175,6 @@ const ViewController: React.FC<ViewControllerProps> = ({
     // Handle Text Changes and Parsing
     const handleTextChange = (newText: string) => setText(newText);
     
-    // Auto-parse when text changes (debounced in parent or here? Doing it here to update JSON)
-    // NOTE: In this refactor, we rely on `onJsonChange` only on Blur or valid Parse to avoid jitter
-    // But for the tree view to stay updated from text input, we need to parse.
-    // Let's implement Format on Blur, and Parse on debounce.
     useEffect(() => {
         const handler = setTimeout(() => {
             const result = safeParse(text);
@@ -194,8 +195,9 @@ const ViewController: React.FC<ViewControllerProps> = ({
     };
 
     const handleSwitchToTree = () => {
-        if (textareaRef.current) {
-            const index = textareaRef.current.selectionStart;
+        if (editorViewRef.current) {
+            // Get cursor position from CodeMirror
+            const index = editorViewRef.current.state.selection.main.head;
             const path = getPathFromIndex(text, index);
             setActivePath(path);
         }
@@ -218,64 +220,36 @@ const ViewController: React.FC<ViewControllerProps> = ({
         if (autoFollow) syncTo('diff', path);
     };
 
-    const handleTextCursor = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-        const target = e.currentTarget;
-        const index = target.selectionStart;
-        const path = getPathFromIndex(text, index);
-        setActivePath(path);
-        if (autoFollow) syncTo('diff', path);
-    };
-
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        const { selectionStart, selectionEnd, value } = e.currentTarget;
-        if (e.key === 'Tab') {
-          e.preventDefault();
-          const newText = value.substring(0, selectionStart) + '  ' + value.substring(selectionEnd);
-          setText(newText);
-          setCursorPos(selectionStart + 2);
-        } else if (e.key === 'Enter') {
-          e.preventDefault();
-          const before = value.substring(0, selectionStart);
-          const after = value.substring(selectionEnd);
-          const lastLine = before.split('\n').pop() || '';
-          const indentMatch = lastLine.match(/^\s*/);
-          let indent = indentMatch ? indentMatch[0] : '';
-          const lastChar = before.trim().slice(-1);
-          const nextChar = after.trim().slice(0, 1);
-          if (lastChar === '{' || lastChar === '[') indent += '  ';
-          const isClosingBlock = (lastChar === '{' && nextChar === '}') || (lastChar === '[' && nextChar === ']');
-          let insert = '\n' + indent;
-          let finalCursorPos = selectionStart + insert.length;
-          if (isClosingBlock) insert += '\n' + indent.slice(0, -2);
-          const newText = before + insert + after;
-          setText(newText);
-          setCursorPos(finalCursorPos);
+    const handleCursorActivity = (view: EditorView) => {
+        if (viewMode === 'text') {
+            const index = view.state.selection.main.head;
+            const path = getPathFromIndex(text, index);
+            setActivePath(path);
+            if (autoFollow) syncTo('diff', path);
         }
     };
 
-    // Sync Text Cursor
+    // Sync Text Cursor when switching back to Text Mode or syncing from other views
     useEffect(() => {
-        if (cursorPos !== null && textareaRef.current) {
-          textareaRef.current.setSelectionRange(cursorPos, cursorPos);
-          textareaRef.current.blur(); 
-          textareaRef.current.focus(); 
-          setCursorPos(null);
+        if (cursorPos !== null && editorViewRef.current && viewMode === 'text') {
+            const view = editorViewRef.current;
+            // Ensure the position is valid
+            const pos = Math.min(cursorPos, view.state.doc.length);
+            
+            view.dispatch({
+                selection: { anchor: pos, head: pos },
+                scrollIntoView: true
+            });
+            view.focus();
+            setCursorPos(null);
         }
-    }, [cursorPos]);
+    }, [cursorPos, viewMode]);
 
     const handleCopyJson = () => {
         navigator.clipboard.writeText(text);
         setCopyFeedback(true);
         setTimeout(() => setCopyFeedback(false), 2000);
     };
-
-    // Update Text when JSON Data updates externally (e.g. from Tree interaction or Reset)
-    // We need to avoid loops. We only update text if it matches parsed result of current text roughly?
-    // Simplified: If JSON changes effectively, we update text.
-    // NOTE: This effect is tricky. If we type in text, `onJsonChange` fires. Then `jsonData` updates. Then this fires.
-    // We should only force update text if the new JSON is structurally different from what `text` parses to?
-    // For now, relies on parent to manage this or simple effect.
-    // In `useEditorState` we handle this.
 
     const handleObjectChange = (newObj: any) => {
         onJsonChange(newObj);
@@ -319,7 +293,15 @@ const ViewController: React.FC<ViewControllerProps> = ({
             <Card className="flex-1 bg-white relative min-h-0">
                 <div className="absolute inset-0 overflow-hidden">
                    {viewMode === 'text' ? (
-                       <textarea ref={textareaRef} className="w-full h-full p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed bg-white text-black block" value={text} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={handleKeyDown} onBlur={formatJson} onClick={handleTextCursor} onKeyUp={handleTextCursor} placeholder={t('editor.placeholder')} spellCheck={false} />
+                       <div className="w-full h-full border-none">
+                           <CodeEditor 
+                                value={text} 
+                                onChange={handleTextChange} 
+                                onBlur={formatJson}
+                                onEditorCreate={(view) => { editorViewRef.current = view; }}
+                                onCursorActivity={handleCursorActivity}
+                           />
+                       </div>
                    ) : (
                        <div className="absolute inset-0 overflow-auto p-4 bg-white">
                             {jsonData ? (
@@ -632,9 +614,6 @@ const EditorWorkspace: React.FC<{
 
   const isInitialized = !!activeWorkspace.baseJson;
   
-  // If Split View is active but no base exists, fallback? Or allow editing empty base?
-  // We allow editing empty base to creating one.
-
   return (
     <div className="h-screen flex font-sans text-zinc-900 bg-zinc-50 overflow-hidden">
       <aside className={`h-full bg-paper border-r-2 border-border shadow-hard z-50 flex flex-col transition-all duration-300 ease-in-out relative ${isSidebarVisible ? 'w-64' : 'w-16'}`} onMouseEnter={() => setSidebarHovered(true)} onMouseLeave={() => setSidebarHovered(false)}>
@@ -725,10 +704,6 @@ const EditorWorkspace: React.FC<{
           <SyncProvider>
             <main ref={containerRef} className="flex-1 w-full p-4 md:p-6 flex flex-col lg:flex-row gap-6 lg:gap-0 overflow-hidden min-h-0">
                 {/* Left Panel: Either Current (in Diff Mode) or Base (in Split Mode) */}
-                {/* Logic Switch: 
-                    If Split Mode: Left is Base Editor, Right is Current Editor.
-                    If Diff Mode: Left is Current Editor, Right is Diff View.
-                */}
                 
                 <div className="flex flex-col h-full w-full lg:w-[var(--left-width)] shrink-0 transition-[width] duration-0 ease-linear min-h-0" style={{ '--left-width': `${leftPanelWidth}%` } as React.CSSProperties}>
                     {appViewMode === 'split' ? (
