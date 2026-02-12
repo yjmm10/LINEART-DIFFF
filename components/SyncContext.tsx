@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useRef } from 'react';
 
-type Zone = 'editor' | 'diff';
+export type Zone = string;
 
 interface SyncContextType {
     register: (zone: Zone, path: string, expand: () => void) => void;

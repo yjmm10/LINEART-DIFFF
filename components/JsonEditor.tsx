@@ -59,7 +59,9 @@ interface JsonEditorProps {
   index?: number;
   onFocusPath?: (path: string) => void;
   // Command passed from parent to force children to expand/collapse
-  recursiveCommand?: RecursiveCommand; 
+  recursiveCommand?: RecursiveCommand;
+  // Zone for sync context (e.g. 'editor', 'editor-base', 'editor-current')
+  syncZone?: string;
 }
 
 const getDataType = (data: any): 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null' => {
@@ -107,7 +109,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   path,
   index,
   onFocusPath,
-  recursiveCommand
+  recursiveCommand,
+  syncZone = 'editor'
 }) => {
   // Initialize isOpen state. Prioritize recursiveCommand if present.
   const [isOpen, setIsOpen] = useState(() => {
@@ -149,9 +152,9 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
 
   // Register for Navigation
   useEffect(() => {
-      register('editor', currentPath, () => setIsOpen(true));
-      return () => unregister('editor', currentPath);
-  }, [currentPath, register, unregister]);
+      register(syncZone, currentPath, () => setIsOpen(true));
+      return () => unregister(syncZone, currentPath);
+  }, [currentPath, register, unregister, syncZone]);
 
   // Handle Default Open changes (only if no active recursive command)
   useEffect(() => {
@@ -169,7 +172,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       if (recursiveCommand && recursiveCommand.id !== lastParentCmdId.current) {
           lastParentCmdId.current = recursiveCommand.id;
           
-          // 1. Update internal state so we pass this command down to our children
+          // 1. Update internal state so we pass this command down to children
           setInternalCommand(recursiveCommand);
           
           // 2. Update our own open state (unless we are root)
@@ -464,7 +467,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
     <div 
         ref={ref}
         className={`font-mono text-sm leading-7 ${!isRoot ? 'ml-4' : ''} relative transition-all duration-200 ${isDragging ? 'opacity-40' : 'opacity-100'}`} 
-        data-sync-id={`editor:${currentPath}`}
+        data-sync-id={`${syncZone}:${currentPath}`}
         draggable={!isRoot}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
@@ -589,6 +592,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                   path={`${currentPath}/${idx}`}
                   onFocusPath={onFocusPath}
                   recursiveCommand={internalCommand}
+                  syncZone={syncZone}
                 />
              ))
           ) : (
@@ -605,6 +609,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                  path={`${currentPath}/${key}`}
                  onFocusPath={onFocusPath}
                  recursiveCommand={internalCommand}
+                 syncZone={syncZone}
                />
             ))
           )}
