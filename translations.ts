@@ -54,10 +54,15 @@ const translations = {
       setOriginal: "Set as Original",
       reset: "Reset to Original",
       clear: "Clear Original",
-      diffActive: "Diff Mode Active"
+      diffActive: "Diff Mode Active",
+      viewMode: "View Mode",
+      modeDiff: "Diff View",
+      modeSplit: "Split Editor"
     },
     editor: {
       title: "Editor",
+      titleBase: "Original (Base)",
+      titleCurrent: "Modified (New)",
       modified: "MODIFIED",
       copy: "Copy",
       copied: "Copied",
@@ -171,10 +176,15 @@ const translations = {
       setOriginal: "设为基准",
       reset: "重置",
       clear: "清除基准",
-      diffActive: "比对模式"
+      diffActive: "比对模式",
+      viewMode: "视图模式",
+      modeDiff: "差异对比",
+      modeSplit: "分屏编辑"
     },
     editor: {
       title: "编辑器",
+      titleBase: "原始文档 (Base)",
+      titleCurrent: "当前文档 (New)",
       modified: "已修改",
       copy: "复制",
       copied: "已复制",

@@ -35,7 +35,9 @@ import {
   Keyboard,
   MousePointer2,
   GripVertical,
-  Zap
+  Zap,
+  Columns,
+  SquareSplitHorizontal
 } from 'lucide-react';
 import { Button, Card, Modal, Input, Label, Select } from './components/ui';
 import JsonTree from './components/JsonTree';
@@ -125,52 +127,167 @@ const DiffMinimap: React.FC<{ scrollContainerRef: React.RefObject<HTMLDivElement
     );
 };
 
-// --- View Controller ---
-const ViewController = ({ 
-    activeWorkspace, updateActiveWorkspace, editorView, setEditorView, formatJson, currentText, handleTextChange, handleKeyDown, cursorPos, setCursorPos, editorExpandAll, handleObjectChange, expandAllKey, diffTree, diffExpandMode, isInitialized, activePathRef, textareaRef, autoFollow, handleCopyJson, copyFeedback
-} : any) => {
+// --- View Controller (Reusable Editor Panel) ---
+
+interface ViewControllerProps {
+    title: string;
+    jsonData: any;
+    onJsonChange: (newJson: any) => void;
+    
+    // State managed by useEditorState
+    text: string;
+    setText: (text: string) => void;
+    viewMode: 'text' | 'tree';
+    setViewMode: (mode: 'text' | 'tree') => void;
+    cursorPos: number | null;
+    setCursorPos: (pos: number | null) => void;
+    activePath: string;
+    setActivePath: (path: string) => void;
+    
+    syncZone: string;
+    autoFollow?: boolean;
+    expandAllTrigger?: number; // Prop to trigger expand all
+    isModified?: boolean;
+    readOnly?: boolean;
+}
+
+const ViewController: React.FC<ViewControllerProps> = ({ 
+    title, jsonData, onJsonChange,
+    text, setText, viewMode, setViewMode, cursorPos, setCursorPos, activePath, setActivePath,
+    syncZone, autoFollow, expandAllTrigger, isModified
+}) => {
     const { syncTo } = useSync();
     const { t } = useLanguage();
+    const [copyFeedback, setCopyFeedback] = useState(false);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const [editorExpandAll, setEditorExpandAll] = useState(true);
+
+    // Watch for global expand trigger
+    useEffect(() => {
+        setEditorExpandAll(true);
+    }, [expandAllTrigger]);
+
+    // Handle Text Changes and Parsing
+    const handleTextChange = (newText: string) => setText(newText);
+    
+    // Auto-parse when text changes (debounced in parent or here? Doing it here to update JSON)
+    // NOTE: In this refactor, we rely on `onJsonChange` only on Blur or valid Parse to avoid jitter
+    // But for the tree view to stay updated from text input, we need to parse.
+    // Let's implement Format on Blur, and Parse on debounce.
+    useEffect(() => {
+        const handler = setTimeout(() => {
+            const result = safeParse(text);
+            if (result.parsed && JSON.stringify(result.parsed) !== JSON.stringify(jsonData)) {
+                onJsonChange(result.parsed);
+            }
+        }, 800);
+        return () => clearTimeout(handler);
+    }, [text]);
+
+    const formatJson = () => {
+        const result = safeParse(text);
+        if (result.parsed) {
+          const formatted = JSON.stringify(result.parsed, null, 2);
+          setText(formatted);
+          onJsonChange(result.parsed);
+        }
+    };
 
     const handleSwitchToTree = () => {
         if (textareaRef.current) {
             const index = textareaRef.current.selectionStart;
-            const path = getPathFromIndex(currentText, index);
-            activePathRef.current = path;
+            const path = getPathFromIndex(text, index);
+            setActivePath(path);
         }
-        setEditorView('tree');
+        setViewMode('tree');
         setTimeout(() => {
-            if (activePathRef.current) syncTo('editor', activePathRef.current);
+            if (activePath) syncTo(syncZone as any, activePath);
         }, 100);
     };
 
     const handleSwitchToText = () => {
-        if (activePathRef.current) {
-            const index = getIndexFromPath(currentText, activePathRef.current);
+        if (activePath) {
+            const index = getIndexFromPath(text, activePath);
             setCursorPos(index);
         }
-        setEditorView('text');
+        setViewMode('text');
     };
 
     const handleFocusPath = (path: string) => {
-        activePathRef.current = path;
+        setActivePath(path);
         if (autoFollow) syncTo('diff', path);
     };
 
     const handleTextCursor = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
         const target = e.currentTarget;
         const index = target.selectionStart;
-        const path = getPathFromIndex(currentText, index);
-        activePathRef.current = path;
+        const path = getPathFromIndex(text, index);
+        setActivePath(path);
         if (autoFollow) syncTo('diff', path);
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        const { selectionStart, selectionEnd, value } = e.currentTarget;
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          const newText = value.substring(0, selectionStart) + '  ' + value.substring(selectionEnd);
+          setText(newText);
+          setCursorPos(selectionStart + 2);
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          const before = value.substring(0, selectionStart);
+          const after = value.substring(selectionEnd);
+          const lastLine = before.split('\n').pop() || '';
+          const indentMatch = lastLine.match(/^\s*/);
+          let indent = indentMatch ? indentMatch[0] : '';
+          const lastChar = before.trim().slice(-1);
+          const nextChar = after.trim().slice(0, 1);
+          if (lastChar === '{' || lastChar === '[') indent += '  ';
+          const isClosingBlock = (lastChar === '{' && nextChar === '}') || (lastChar === '[' && nextChar === ']');
+          let insert = '\n' + indent;
+          let finalCursorPos = selectionStart + insert.length;
+          if (isClosingBlock) insert += '\n' + indent.slice(0, -2);
+          const newText = before + insert + after;
+          setText(newText);
+          setCursorPos(finalCursorPos);
+        }
+    };
+
+    // Sync Text Cursor
+    useEffect(() => {
+        if (cursorPos !== null && textareaRef.current) {
+          textareaRef.current.setSelectionRange(cursorPos, cursorPos);
+          textareaRef.current.blur(); 
+          textareaRef.current.focus(); 
+          setCursorPos(null);
+        }
+    }, [cursorPos]);
+
+    const handleCopyJson = () => {
+        navigator.clipboard.writeText(text);
+        setCopyFeedback(true);
+        setTimeout(() => setCopyFeedback(false), 2000);
+    };
+
+    // Update Text when JSON Data updates externally (e.g. from Tree interaction or Reset)
+    // We need to avoid loops. We only update text if it matches parsed result of current text roughly?
+    // Simplified: If JSON changes effectively, we update text.
+    // NOTE: This effect is tricky. If we type in text, `onJsonChange` fires. Then `jsonData` updates. Then this fires.
+    // We should only force update text if the new JSON is structurally different from what `text` parses to?
+    // For now, relies on parent to manage this or simple effect.
+    // In `useEditorState` we handle this.
+
+    const handleObjectChange = (newObj: any) => {
+        onJsonChange(newObj);
+        setText(JSON.stringify(newObj, null, 2));
     };
 
     return (
         <>
             <div className="flex justify-between items-end mb-2 shrink-0">
                <div className="flex items-center gap-2">
-                  <h2 className="font-bold text-lg">{t('editor.title')}</h2>
-                  {isInitialized && <span className="text-xs font-mono text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded">{t('editor.modified')}</span>}
+                  <h2 className="font-bold text-lg">{title}</h2>
+                  {isModified && <span className="text-xs font-mono text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded">{t('editor.modified')}</span>}
                </div>
                
                <div className="flex items-center gap-2">
@@ -180,7 +297,7 @@ const ViewController = ({
                                <span className="text-xs font-bold hidden xl:inline">{copyFeedback ? t('editor.copied') : t('editor.copy')}</span>
                            </button>
 
-                           {editorView === 'text' && (
+                           {viewMode === 'text' && (
                                <button onClick={formatJson} className="bg-white hover:bg-zinc-100 text-zinc-700 p-1.5 rounded-md border border-zinc-300 shadow-sm transition-all flex items-center gap-1" title={t('editor.format')}>
                                   <Wand2 size={14} />
                                   <span className="text-xs font-bold hidden xl:inline">{t('editor.format')}</span>
@@ -189,10 +306,10 @@ const ViewController = ({
                        </div>
 
                        <div className="flex bg-white border-2 border-black shadow-sm rounded-sm overflow-hidden">
-                           <button onClick={handleSwitchToText} className={`px-3 py-1 text-xs font-bold flex items-center gap-1 transition-colors ${editorView === 'text' ? 'bg-black text-white' : 'hover:bg-zinc-100 text-zinc-600'}`}>
+                           <button onClick={handleSwitchToText} className={`px-3 py-1 text-xs font-bold flex items-center gap-1 transition-colors ${viewMode === 'text' ? 'bg-black text-white' : 'hover:bg-zinc-100 text-zinc-600'}`}>
                               <Code size={14} /> {t('editor.textMode')}
                            </button>
-                           <button onClick={handleSwitchToTree} className={`px-3 py-1 text-xs font-bold flex items-center gap-1 transition-colors ${editorView === 'tree' ? 'bg-black text-white' : 'hover:bg-zinc-100 text-zinc-600'}`}>
+                           <button onClick={handleSwitchToTree} className={`px-3 py-1 text-xs font-bold flex items-center gap-1 transition-colors ${viewMode === 'tree' ? 'bg-black text-white' : 'hover:bg-zinc-100 text-zinc-600'}`}>
                               <LayoutList size={14} /> {t('editor.treeMode')}
                            </button>
                        </div>
@@ -201,12 +318,12 @@ const ViewController = ({
 
             <Card className="flex-1 bg-white relative min-h-0">
                 <div className="absolute inset-0 overflow-hidden">
-                   {editorView === 'text' ? (
-                       <textarea ref={textareaRef} className="w-full h-full p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed bg-white text-black block" value={currentText} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={handleKeyDown} onBlur={formatJson} onClick={handleTextCursor} onKeyUp={handleTextCursor} placeholder={t('editor.placeholder')} spellCheck={false} />
+                   {viewMode === 'text' ? (
+                       <textarea ref={textareaRef} className="w-full h-full p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed bg-white text-black block" value={text} onChange={(e) => handleTextChange(e.target.value)} onKeyDown={handleKeyDown} onBlur={formatJson} onClick={handleTextCursor} onKeyUp={handleTextCursor} placeholder={t('editor.placeholder')} spellCheck={false} />
                    ) : (
                        <div className="absolute inset-0 overflow-auto p-4 bg-white">
-                            {activeWorkspace.currentJson ? (
-                               <JsonEditor key={`editor-${expandAllKey}`} data={activeWorkspace.currentJson} onChange={handleObjectChange} isRoot={true} defaultOpen={editorExpandAll} path="#" onFocusPath={handleFocusPath} />
+                            {jsonData ? (
+                               <JsonEditor key={`editor-${expandAllTrigger}`} data={jsonData} onChange={handleObjectChange} isRoot={true} defaultOpen={editorExpandAll} path="#" onFocusPath={handleFocusPath} />
                             ) : (
                                <div className="text-zinc-400 text-center mt-10 font-mono text-sm">{t('editor.invalid')}</div>
                             )}
@@ -216,7 +333,40 @@ const ViewController = ({
             </Card>
         </>
     );
-}
+};
+
+// --- Hook: Editor State Management ---
+// Manages the internal state of an editor instance (text, cursor, view mode) to decouple from Main Workspace
+const useEditorState = (initialJson: any) => {
+    const [text, setText] = useState<string>(JSON.stringify(initialJson, null, 2) || "");
+    const [viewMode, setViewMode] = useState<'text' | 'tree'>('tree');
+    const [cursorPos, setCursorPos] = useState<number | null>(null);
+    const [activePath, setActivePath] = useState<string>("#");
+
+    // When external JSON changes (e.g. workspace switch or reset), update text
+    // We need a ref to track if the update came from internal typing or external switch
+    const lastJsonRef = useRef(initialJson);
+    
+    useEffect(() => {
+        if (JSON.stringify(initialJson) !== JSON.stringify(lastJsonRef.current)) {
+            setText(JSON.stringify(initialJson, null, 2) || "");
+            lastJsonRef.current = initialJson;
+        }
+    }, [initialJson]);
+
+    // Update ref when text changes successfully parsed (to avoid loop)
+    const handleJsonUpdate = (newJson: any) => {
+        lastJsonRef.current = newJson;
+    };
+
+    return {
+        text, setText,
+        viewMode, setViewMode,
+        cursorPos, setCursorPos,
+        activePath, setActivePath,
+        handleJsonUpdate
+    };
+};
 
 // --- Main Editor Workspace ---
 const EditorWorkspace: React.FC<{ 
@@ -238,6 +388,10 @@ const EditorWorkspace: React.FC<{
   useEffect(() => localStorage.setItem('lineart_workspaces', JSON.stringify(workspaces)), [workspaces]);
   useEffect(() => localStorage.setItem('lineart_active_id', activeWorkspaceId), [activeWorkspaceId]);
 
+  // --- Editor States (Base & Current) ---
+  const currentEditor = useEditorState(activeWorkspace.currentJson);
+  const baseEditor = useEditorState(activeWorkspace.baseJson);
+
   // --- Sidebar & UI State ---
   const [sidebarPinned, setSidebarPinned] = useState(true);
   const [sidebarHovered, setSidebarHovered] = useState(false);
@@ -245,16 +399,9 @@ const EditorWorkspace: React.FC<{
   
   const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
-  const [currentText, setCurrentText] = useState<string>(JSON.stringify(activeWorkspace.currentJson, null, 2));
   
-  useEffect(() => {
-      setCurrentText(JSON.stringify(activeWorkspace.currentJson, null, 2));
-      // Reset logic
-  }, [activeWorkspaceId]);
-
-  const [editorView, setEditorView] = useState<'text' | 'tree'>('tree');
+  const [appViewMode, setAppViewMode] = useState<'diff' | 'split'>('diff');
   const [autoFollow, setAutoFollow] = useState(false);
-  const [copyFeedback, setCopyFeedback] = useState(false);
   
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
@@ -284,29 +431,25 @@ const EditorWorkspace: React.FC<{
 
   const [expandAllKey, setExpandAllKey] = useState(0);
   const [diffExpandMode, setDiffExpandMode] = useState<'all' | 'none' | 'smart'>('smart');
-  const [editorExpandAll, setEditorExpandAll] = useState(true);
 
   const [leftPanelWidth, setLeftPanelWidth] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const diffScrollRef = useRef<HTMLDivElement>(null);
-  const [cursorPos, setCursorPos] = useState<number | null>(null);
-  const activePathRef = useRef<string>("#");
-
-  useEffect(() => {
-      const handler = setTimeout(() => {
-          const result = safeParse(currentText);
-          if (result.parsed && JSON.stringify(result.parsed) !== JSON.stringify(activeWorkspace.currentJson)) {
-              updateActiveWorkspace({ currentJson: result.parsed });
-          }
-      }, 600); 
-      return () => clearTimeout(handler);
-  }, [currentText]);
 
   const updateActiveWorkspace = (updates: Partial<Workspace>) => {
       setWorkspaces(prev => prev.map(w => w.id === activeWorkspaceId ? { ...w, ...updates, lastModified: Date.now() } : w));
+  };
+
+  const handleJsonChange = (type: 'base' | 'current', newJson: any) => {
+      if (type === 'current') {
+          updateActiveWorkspace({ currentJson: newJson });
+          currentEditor.handleJsonUpdate(newJson);
+      } else {
+          updateActiveWorkspace({ baseJson: newJson });
+          baseEditor.handleJsonUpdate(newJson);
+      }
   };
 
   const handleCreateWorkspace = () => {
@@ -358,7 +501,7 @@ const EditorWorkspace: React.FC<{
   const handleRestoreSnapshot = (snapshot: Snapshot) => {
       if (window.confirm(`${t('modals.snapshots.restore')} "${snapshot.name}"?`)) {
           updateActiveWorkspace({ currentJson: JSON.parse(JSON.stringify(snapshot.data)) });
-          setCurrentText(JSON.stringify(snapshot.data, null, 2));
+          // Note: useEffect in useEditorState handles text update
           setIsSnapshotModalOpen(false);
       }
   };
@@ -378,26 +521,24 @@ const EditorWorkspace: React.FC<{
   };
 
   // Logic Handlers
-  const handleTextChange = (text: string) => setCurrentText(text);
-  const handleObjectChange = (newObj: any) => {
-    updateActiveWorkspace({ currentJson: newObj });
-    setCurrentText(JSON.stringify(newObj, null, 2));
-  };
   const handleSetOriginal = () => updateActiveWorkspace({ baseJson: JSON.parse(JSON.stringify(activeWorkspace.currentJson)) });
   const handleReset = () => {
     if (activeWorkspace.baseJson) {
-      const text = JSON.stringify(activeWorkspace.baseJson, null, 2);
-      setCurrentText(text);
-      updateActiveWorkspace({ currentJson: JSON.parse(text) });
+      updateActiveWorkspace({ currentJson: JSON.parse(JSON.stringify(activeWorkspace.baseJson)) });
     }
   };
-  const handleCopyJson = () => {
-      navigator.clipboard.writeText(currentText);
-      setCopyFeedback(true);
-      setTimeout(() => setCopyFeedback(false), 2000);
+  
+  const handleExpandAll = () => { 
+      setExpandAllKey(k => k + 1); // Triggers effect in sub-components
+      setDiffExpandMode('all'); 
   };
-  const handleExpandAll = () => { setEditorExpandAll(true); setDiffExpandMode('all'); setExpandAllKey(k => k + 1); };
-  const handleCollapseAll = () => { setEditorExpandAll(false); setDiffExpandMode('none'); setExpandAllKey(k => k + 1); };
+  const handleCollapseAll = () => { 
+      // We don't have a direct "Collapse All" trigger for Editor yet except manual defaultOpen=false
+      // But we can trigger re-render with defaultOpen={false} maybe?
+      // For now mostly affects Diff
+      setDiffExpandMode('none'); 
+      setExpandAllKey(k => k + 1); 
+  };
   const handleSmartExpand = () => { setDiffExpandMode('smart'); setExpandAllKey(k => k + 1); };
 
   const handleExport = () => {
@@ -419,10 +560,8 @@ const EditorWorkspace: React.FC<{
             const data = result.parsed;
             if (isProjectFile(data)) {
                 updateActiveWorkspace({ baseJson: data.base, currentJson: data.current });
-                setCurrentText(JSON.stringify(data.current, null, 2));
             } else {
                 updateActiveWorkspace({ currentJson: data, baseJson: activeWorkspace.baseJson || data });
-                setCurrentText(JSON.stringify(data, null, 2));
             }
             setIsExportModalOpen(false);
         }
@@ -450,55 +589,11 @@ const EditorWorkspace: React.FC<{
   const applyCompare = () => {
       if (compareCurrentFile) {
           updateActiveWorkspace({ baseJson: compareBaseFile, currentJson: compareCurrentFile });
-          setCurrentText(JSON.stringify(compareCurrentFile, null, 2));
           setIsCompareModalOpen(false);
           setCompareBaseFile(null);
           setCompareCurrentFile(null);
       }
   };
-
-  const formatJson = () => {
-    const result = safeParse(currentText);
-    if (result.parsed) {
-      const formatted = JSON.stringify(result.parsed, null, 2);
-      setCurrentText(formatted);
-      updateActiveWorkspace({ currentJson: result.parsed });
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    const { selectionStart, selectionEnd, value } = e.currentTarget;
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      const newText = value.substring(0, selectionStart) + '  ' + value.substring(selectionEnd);
-      setCurrentText(newText);
-      setCursorPos(selectionStart + 2);
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      const before = value.substring(0, selectionStart);
-      const after = value.substring(selectionEnd);
-      const lastLine = before.split('\n').pop() || '';
-      const indentMatch = lastLine.match(/^\s*/);
-      let indent = indentMatch ? indentMatch[0] : '';
-      const lastChar = before.trim().slice(-1);
-      const nextChar = after.trim().slice(0, 1);
-      if (lastChar === '{' || lastChar === '[') indent += '  ';
-      const isClosingBlock = (lastChar === '{' && nextChar === '}') || (lastChar === '[' && nextChar === ']');
-      let insert = '\n' + indent;
-      let finalCursorPos = selectionStart + insert.length;
-      if (isClosingBlock) insert += '\n' + indent.slice(0, -2);
-      const newText = before + insert + after;
-      setCurrentText(newText);
-      setCursorPos(finalCursorPos);
-    }
-  };
-
-  useEffect(() => {
-    if (cursorPos !== null && textareaRef.current) {
-      textareaRef.current.setSelectionRange(cursorPos, cursorPos);
-      textareaRef.current.blur(); textareaRef.current.focus(); setCursorPos(null);
-    }
-  }, [cursorPos]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -536,6 +631,9 @@ const EditorWorkspace: React.FC<{
   }, [diffTree]);
 
   const isInitialized = !!activeWorkspace.baseJson;
+  
+  // If Split View is active but no base exists, fallback? Or allow editing empty base?
+  // We allow editing empty base to creating one.
 
   return (
     <div className="h-screen flex font-sans text-zinc-900 bg-zinc-50 overflow-hidden">
@@ -603,6 +701,17 @@ const EditorWorkspace: React.FC<{
                  <h2 className="text-xl font-bold truncate">{activeWorkspace.name}</h2>
                  {activeWorkspace.baseJson && <span className="text-xs bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded-full font-bold">{t('header.diffActive')}</span>}
              </div>
+             
+             {/* View Switcher */}
+             <div className="hidden md:flex bg-zinc-100 p-0.5 rounded-md border border-zinc-200">
+                 <button onClick={() => setAppViewMode('diff')} className={`px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 rounded-sm transition-all ${appViewMode === 'diff' ? 'bg-white shadow-sm text-black' : 'text-zinc-500 hover:text-zinc-700'}`}>
+                    <Columns size={14} /> {t('header.modeDiff')}
+                 </button>
+                 <button onClick={() => setAppViewMode('split')} className={`px-3 py-1.5 text-xs font-bold flex items-center gap-1.5 rounded-sm transition-all ${appViewMode === 'split' ? 'bg-white shadow-sm text-black' : 'text-zinc-500 hover:text-zinc-700'}`}>
+                    <SquareSplitHorizontal size={14} /> {t('header.modeSplit')}
+                 </button>
+             </div>
+
              <div className="flex items-center gap-2">
                  <Button onClick={handleExpandAll} variant="secondary" className="px-3" title={t('header.expandAll')}><Maximize2 size={16} /></Button>
                  <Button onClick={handleCollapseAll} variant="secondary" className="px-3" title={t('header.collapseAll')}><Minimize2 size={16} /></Button>
@@ -615,25 +724,75 @@ const EditorWorkspace: React.FC<{
 
           <SyncProvider>
             <main ref={containerRef} className="flex-1 w-full p-4 md:p-6 flex flex-col lg:flex-row gap-6 lg:gap-0 overflow-hidden min-h-0">
+                {/* Left Panel: Either Current (in Diff Mode) or Base (in Split Mode) */}
+                {/* Logic Switch: 
+                    If Split Mode: Left is Base Editor, Right is Current Editor.
+                    If Diff Mode: Left is Current Editor, Right is Diff View.
+                */}
+                
                 <div className="flex flex-col h-full w-full lg:w-[var(--left-width)] shrink-0 transition-[width] duration-0 ease-linear min-h-0" style={{ '--left-width': `${leftPanelWidth}%` } as React.CSSProperties}>
-                    <ViewController activeWorkspace={activeWorkspace} updateActiveWorkspace={updateActiveWorkspace} editorView={editorView} setEditorView={setEditorView} formatJson={formatJson} currentText={currentText} handleTextChange={handleTextChange} handleKeyDown={handleKeyDown} cursorPos={cursorPos} setCursorPos={setCursorPos} editorExpandAll={editorExpandAll} handleObjectChange={handleObjectChange} expandAllKey={expandAllKey} diffTree={diffTree} diffExpandMode={diffExpandMode} isInitialized={isInitialized} activePathRef={activePathRef} textareaRef={textareaRef} autoFollow={autoFollow} handleCopyJson={handleCopyJson} copyFeedback={copyFeedback} />
+                    {appViewMode === 'split' ? (
+                         /* Split Mode: Left Panel = Base Editor */
+                        <ViewController 
+                            title={t('editor.titleBase')}
+                            jsonData={activeWorkspace.baseJson}
+                            onJsonChange={(newJson) => handleJsonChange('base', newJson)}
+                            syncZone="editor-base"
+                            {...baseEditor}
+                            autoFollow={autoFollow}
+                            expandAllTrigger={expandAllKey}
+                        />
+                    ) : (
+                         /* Diff Mode: Left Panel = Current Editor */
+                        <ViewController 
+                            title={t('editor.title')}
+                            jsonData={activeWorkspace.currentJson}
+                            onJsonChange={(newJson) => handleJsonChange('current', newJson)}
+                            syncZone="editor"
+                            {...currentEditor}
+                            autoFollow={autoFollow}
+                            expandAllTrigger={expandAllKey}
+                            isModified={isInitialized}
+                        />
+                    )}
                 </div>
+                
+                {/* Draggable Divider */}
                 <div className="hidden lg:flex w-4 items-center justify-center cursor-col-resize hover:bg-zinc-200 transition-colors mx-2 rounded shrink-0" onMouseDown={() => setIsDragging(true)} title="Drag to resize"><div className="w-1 h-8 bg-zinc-300 rounded-full flex items-center justify-center"></div></div>
+                
+                {/* Right Panel */}
                 <div className="flex-1 flex flex-col h-full w-full min-w-0 min-h-0">
-                    <div className="flex justify-between items-end mb-2 shrink-0">
-                        <div className="flex items-center gap-2">
-                            <h2 className="font-bold text-lg flex items-center gap-2"><ArrowLeftRight className="text-emerald-600" /> {t('diff.title')}</h2>
-                            {isInitialized && <span className="text-xs font-mono text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded">{t('diff.view')}</span>}
-                            {isInitialized && <button onClick={() => setAutoFollow(!autoFollow)} className={`flex items-center gap-1.5 px-2 py-1 ml-2 rounded text-[10px] uppercase font-bold border transition-colors ${autoFollow ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-white text-zinc-400 border-zinc-200 hover:border-zinc-300 hover:text-zinc-600'}`} title={t('diff.autoFollow')}><div className={`w-1.5 h-1.5 rounded-full ${autoFollow ? 'bg-blue-500 animate-pulse' : 'bg-zinc-300'}`} />{t('diff.autoFollow')}</button>}
-                        </div>
-                        {isInitialized && <div className="flex gap-2"><span title="Total Added Lines" className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100">+{stats.added}</span><span title="Total Removed Lines" className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded border border-rose-100">-{stats.removed}</span><span title="Total Modified Fields" className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100">~{stats.modified}</span></div>}
-                    </div>
-                    <Card className="flex-1 bg-white min-h-0 relative">
-                        <div ref={diffScrollRef} className="absolute inset-0 overflow-auto p-4 pr-6 scroll-smooth">
-                            {isInitialized && activeWorkspace.baseJson ? ( diffTree ? <JsonTree key={`diff-${expandAllKey}`} data={diffTree} isRoot={true} expandMode={diffExpandMode} path="#" /> : <div className="flex flex-col items-center justify-center h-full text-zinc-400"><p>{t('diff.noChanges')}</p></div> ) : <div className="flex flex-col items-center justify-center h-full text-zinc-400 opacity-60 text-center px-8"><div className="border-2 border-dashed border-zinc-300 p-6 rounded-lg mb-4"><FileText size={48} className="text-zinc-300" /></div><p className="font-bold text-zinc-600">{t('diff.noBase')}</p><p className="text-sm mt-2 max-w-xs">{t('diff.noBaseDesc')}</p></div>}
-                        </div>
-                        {isInitialized && <DiffMinimap scrollContainerRef={diffScrollRef} triggerUpdate={diffTree} />}
-                    </Card>
+                    {appViewMode === 'split' ? (
+                        /* Split Mode: Right Panel = Current Editor */
+                        <ViewController 
+                            title={t('editor.titleCurrent')}
+                            jsonData={activeWorkspace.currentJson}
+                            onJsonChange={(newJson) => handleJsonChange('current', newJson)}
+                            syncZone="editor-current"
+                            {...currentEditor}
+                            autoFollow={autoFollow}
+                            expandAllTrigger={expandAllKey}
+                            isModified={true}
+                        />
+                    ) : (
+                        /* Diff Mode: Right Panel = Diff Tree */
+                        <>
+                            <div className="flex justify-between items-end mb-2 shrink-0">
+                                <div className="flex items-center gap-2">
+                                    <h2 className="font-bold text-lg flex items-center gap-2"><ArrowLeftRight className="text-emerald-600" /> {t('diff.title')}</h2>
+                                    {isInitialized && <span className="text-xs font-mono text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded">{t('diff.view')}</span>}
+                                    {isInitialized && <button onClick={() => setAutoFollow(!autoFollow)} className={`flex items-center gap-1.5 px-2 py-1 ml-2 rounded text-[10px] uppercase font-bold border transition-colors ${autoFollow ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-white text-zinc-400 border-zinc-200 hover:border-zinc-300 hover:text-zinc-600'}`} title={t('diff.autoFollow')}><div className={`w-1.5 h-1.5 rounded-full ${autoFollow ? 'bg-blue-500 animate-pulse' : 'bg-zinc-300'}`} />{t('diff.autoFollow')}</button>}
+                                </div>
+                                {isInitialized && <div className="flex gap-2"><span title="Total Added Lines" className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100">+{stats.added}</span><span title="Total Removed Lines" className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded border border-rose-100">-{stats.removed}</span><span title="Total Modified Fields" className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100">~{stats.modified}</span></div>}
+                            </div>
+                            <Card className="flex-1 bg-white min-h-0 relative">
+                                <div ref={diffScrollRef} className="absolute inset-0 overflow-auto p-4 pr-6 scroll-smooth">
+                                    {isInitialized && activeWorkspace.baseJson ? ( diffTree ? <JsonTree key={`diff-${expandAllKey}`} data={diffTree} isRoot={true} expandMode={diffExpandMode} path="#" /> : <div className="flex flex-col items-center justify-center h-full text-zinc-400"><p>{t('diff.noChanges')}</p></div> ) : <div className="flex flex-col items-center justify-center h-full text-zinc-400 opacity-60 text-center px-8"><div className="border-2 border-dashed border-zinc-300 p-6 rounded-lg mb-4"><FileText size={48} className="text-zinc-300" /></div><p className="font-bold text-zinc-600">{t('diff.noBase')}</p><p className="text-sm mt-2 max-w-xs">{t('diff.noBaseDesc')}</p></div>}
+                                </div>
+                                {isInitialized && <DiffMinimap scrollContainerRef={diffScrollRef} triggerUpdate={diffTree} />}
+                            </Card>
+                        </>
+                    )}
                 </div>
             </main>
           </SyncProvider>
