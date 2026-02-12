@@ -148,6 +148,7 @@ interface ViewControllerProps {
     setActivePath: (path: string) => void;
     
     syncZone: string;
+    syncTarget?: string;
     autoFollow?: boolean;
     expandAllTrigger?: number; // Prop to trigger expand all
     isModified?: boolean;
@@ -157,7 +158,7 @@ interface ViewControllerProps {
 const ViewController: React.FC<ViewControllerProps> = ({ 
     title, jsonData, onJsonChange,
     text, setText, viewMode, setViewMode, cursorPos, setCursorPos, activePath, setActivePath,
-    syncZone, autoFollow, expandAllTrigger, isModified
+    syncZone, syncTarget = 'diff', autoFollow, expandAllTrigger, isModified
 }) => {
     const { syncTo } = useSync();
     const { t } = useLanguage();
@@ -204,7 +205,7 @@ const ViewController: React.FC<ViewControllerProps> = ({
         }
         setViewMode('tree');
         setTimeout(() => {
-            if (activePath) syncTo(syncZone as any, activePath);
+            if (activePath) syncTo(syncZone, activePath);
         }, 100);
     };
 
@@ -218,7 +219,7 @@ const ViewController: React.FC<ViewControllerProps> = ({
 
     const handleFocusPath = (path: string) => {
         setActivePath(path);
-        if (autoFollow) syncTo('diff', path);
+        if (autoFollow) syncTo(syncTarget, path);
     };
 
     const handleCursorActivity = (view: EditorView) => {
@@ -226,7 +227,7 @@ const ViewController: React.FC<ViewControllerProps> = ({
             const index = view.state.selection.main.head;
             const path = getPathFromIndex(text, index);
             setActivePath(path);
-            if (autoFollow) syncTo('diff', path);
+            if (autoFollow) syncTo(syncTarget, path);
         }
     };
 
@@ -306,7 +307,17 @@ const ViewController: React.FC<ViewControllerProps> = ({
                    ) : (
                        <div className="absolute inset-0 overflow-auto p-4 bg-white">
                             {jsonData ? (
-                               <JsonEditor key={`editor-${expandAllTrigger}`} data={jsonData} onChange={handleObjectChange} isRoot={true} defaultOpen={editorExpandAll} path="#" onFocusPath={handleFocusPath} syncZone={syncZone} />
+                               <JsonEditor 
+                                    key={`editor-${expandAllTrigger}`} 
+                                    data={jsonData} 
+                                    onChange={handleObjectChange} 
+                                    isRoot={true} 
+                                    defaultOpen={editorExpandAll} 
+                                    path="#" 
+                                    onFocusPath={handleFocusPath} 
+                                    syncZone={syncZone}
+                                    syncTarget={syncTarget}
+                               />
                             ) : (
                                <div className="text-zinc-400 text-center mt-10 font-mono text-sm">{t('editor.invalid')}</div>
                             )}
@@ -710,11 +721,11 @@ const EditorWorkspace: React.FC<{
                     {appViewMode === 'split' ? (
                          /* Split Mode: Left Panel = Base Editor */
                         <ViewController 
-                            key="split-left"
                             title={t('editor.titleBase')}
                             jsonData={activeWorkspace.baseJson}
                             onJsonChange={(newJson) => handleJsonChange('base', newJson)}
                             syncZone="editor-base"
+                            syncTarget="editor-current"
                             {...baseEditor}
                             autoFollow={autoFollow}
                             expandAllTrigger={expandAllKey}
@@ -722,11 +733,11 @@ const EditorWorkspace: React.FC<{
                     ) : (
                          /* Diff Mode: Left Panel = Current Editor */
                         <ViewController 
-                            key="diff-left"
                             title={t('editor.title')}
                             jsonData={activeWorkspace.currentJson}
                             onJsonChange={(newJson) => handleJsonChange('current', newJson)}
                             syncZone="editor"
+                            syncTarget="diff"
                             {...currentEditor}
                             autoFollow={autoFollow}
                             expandAllTrigger={expandAllKey}
@@ -743,11 +754,11 @@ const EditorWorkspace: React.FC<{
                     {appViewMode === 'split' ? (
                         /* Split Mode: Right Panel = Current Editor */
                         <ViewController 
-                            key="split-right"
                             title={t('editor.titleCurrent')}
                             jsonData={activeWorkspace.currentJson}
                             onJsonChange={(newJson) => handleJsonChange('current', newJson)}
                             syncZone="editor-current"
+                            syncTarget="editor-base"
                             {...currentEditor}
                             autoFollow={autoFollow}
                             expandAllTrigger={expandAllKey}
@@ -830,69 +841,141 @@ const EditorWorkspace: React.FC<{
   );
 };
 
+// --- About Modal ---
+const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+  const { t } = useLanguage();
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={t('modals.about.title')}>
+       <div className="space-y-8">
+          {/* Features Section */}
+          <section>
+             <h4 className="font-black text-sm uppercase tracking-wider text-zinc-400 mb-4">{t('hero.features')}</h4>
+             <div className="grid grid-cols-1 gap-3">
+                <div className="p-3 bg-zinc-50 border border-zinc-200 rounded flex gap-3">
+                    <div className="mt-0.5 text-zinc-500"><LayoutList size={16} /></div>
+                    <div>
+                        <h5 className="font-bold text-sm">{t('features.format.title')}</h5>
+                        <p className="text-xs text-zinc-500 mt-1">{t('features.format.desc')}</p>
+                    </div>
+                </div>
+                <div className="p-3 bg-zinc-50 border border-zinc-200 rounded flex gap-3">
+                    <div className="mt-0.5 text-zinc-500"><ArrowLeftRight size={16} /></div>
+                    <div>
+                        <h5 className="font-bold text-sm">{t('features.diff.title')}</h5>
+                        <p className="text-xs text-zinc-500 mt-1">{t('features.diff.desc')}</p>
+                    </div>
+                </div>
+             </div>
+          </section>
+
+          {/* Pro Tips Section */}
+          <section>
+             <h4 className="font-black text-sm uppercase tracking-wider text-zinc-400 mb-4">{t('guide.tips.title')}</h4>
+             <div className="space-y-4">
+                 <div className="flex gap-4 items-start group">
+                     <div className="shrink-0 w-10 h-10 bg-white border-2 border-zinc-100 group-hover:border-black rounded flex items-center justify-center text-zinc-400 group-hover:text-black transition-colors shadow-sm">
+                         <GripVertical size={20} />
+                     </div>
+                     <div>
+                         <h5 className="font-bold text-sm">{t('guide.tips.dnd')}</h5>
+                         <p className="text-xs text-zinc-500 mt-1 leading-relaxed">{t('guide.tips.dndDesc')}</p>
+                     </div>
+                 </div>
+                 
+                 <div className="flex gap-4 items-start group">
+                     <div className="shrink-0 w-10 h-10 bg-white border-2 border-zinc-100 group-hover:border-accent rounded flex items-center justify-center text-zinc-400 group-hover:text-accent transition-colors shadow-sm">
+                         <MousePointer2 size={20} />
+                     </div>
+                     <div>
+                         <h5 className="font-bold text-sm">{t('guide.tips.jump')}</h5>
+                         <p className="text-xs text-zinc-500 mt-1 leading-relaxed">{t('guide.tips.jumpDesc')}</p>
+                     </div>
+                 </div>
+
+                 <div className="flex gap-4 items-start group">
+                     <div className="shrink-0 w-10 h-10 bg-white border-2 border-zinc-100 group-hover:border-emerald-500 rounded flex items-center justify-center text-zinc-400 group-hover:text-emerald-500 transition-colors shadow-sm">
+                         <Zap size={20} />
+                     </div>
+                     <div>
+                         <h5 className="font-bold text-sm">{t('guide.tips.actions')}</h5>
+                         <p className="text-xs text-zinc-500 mt-1 leading-relaxed">{t('guide.tips.actionsDesc')}</p>
+                     </div>
+                 </div>
+
+                 <div className="flex gap-4 items-start group">
+                     <div className="shrink-0 w-10 h-10 bg-white border-2 border-zinc-100 group-hover:border-indigo-500 rounded flex items-center justify-center text-zinc-400 group-hover:text-indigo-500 transition-colors shadow-sm">
+                         <FoldVertical size={20} />
+                     </div>
+                     <div>
+                         <h5 className="font-bold text-sm">{t('guide.tips.folding')}</h5>
+                         <p className="text-xs text-zinc-500 mt-1 leading-relaxed">{t('guide.tips.foldingDesc')}</p>
+                     </div>
+                 </div>
+             </div>
+          </section>
+          
+          {/* Shortcuts */}
+          <section className="bg-zinc-100 rounded p-4">
+              <h4 className="font-bold text-xs uppercase tracking-wider text-zinc-500 mb-3">{t('guide.shortcuts.title')}</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="flex items-center justify-between bg-white p-2 rounded border border-zinc-200">
+                      <span>{t('guide.shortcuts.format')}</span>
+                      <kbd className="font-mono bg-zinc-50 border border-zinc-200 px-1.5 py-0.5 rounded text-[10px] text-zinc-500">Blur</kbd>
+                  </div>
+                  <div className="flex items-center justify-between bg-white p-2 rounded border border-zinc-200">
+                      <span>{t('guide.shortcuts.expand')}</span>
+                      <kbd className="font-mono bg-zinc-50 border border-zinc-200 px-1.5 py-0.5 rounded text-[10px] text-zinc-500">Click</kbd>
+                  </div>
+              </div>
+          </section>
+          
+          <div className="text-center text-xs text-zinc-300">
+             LineArt JSON v2.0.0
+          </div>
+       </div>
+    </Modal>
+  );
+};
+
+// --- Main App Wrapper ---
 const MainApp = () => {
-    const [view, setView] = useState<'landing' | 'editor'>('landing');
+    const [view, setView] = useState<'landing' | 'app'>('landing');
     const [isAboutOpen, setIsAboutOpen] = useState(false);
-    const { t } = useLanguage();
+
+    // Persist view state slightly (optional, mostly for dev refreshing)
+    useEffect(() => {
+        const lastView = localStorage.getItem('lineart_view');
+        if (lastView === 'app') setView('app');
+    }, []);
+
+    const goToApp = () => {
+        setView('app');
+        localStorage.setItem('lineart_view', 'app');
+    };
+
+    const goToLanding = () => {
+        setView('landing');
+        localStorage.setItem('lineart_view', 'landing');
+    };
 
     return (
         <>
             {view === 'landing' ? (
-                <LandingPage 
-                    onStart={() => setView('editor')} 
-                    onOpenAbout={() => setIsAboutOpen(true)} 
-                />
+                <LandingPage onStart={goToApp} onOpenAbout={() => setIsAboutOpen(true)} />
             ) : (
-                <EditorWorkspace 
-                    onGoHome={() => setView('landing')} 
-                    onOpenAbout={() => setIsAboutOpen(true)} 
-                />
+                <EditorWorkspace onGoHome={goToLanding} onOpenAbout={() => setIsAboutOpen(true)} />
             )}
-            
-            <Modal isOpen={isAboutOpen} onClose={() => setIsAboutOpen(false)} title={t('modals.about.title')}>
-                <div className="space-y-6">
-                    <div>
-                        <p className="font-bold text-lg mb-1">LineArt JSON</p>
-                        <p className="text-zinc-600 text-sm">v2.0.0 Alpha</p>
-                    </div>
-                    
-                    <div>
-                        <h4 className="font-bold uppercase text-xs text-zinc-400 mb-3 tracking-wider">{t('guide.tips.title')}</h4>
-                        <ul className="space-y-4 text-sm">
-                            <li className="bg-zinc-50 p-3 rounded border border-zinc-100">
-                                <div className="font-bold mb-1 flex items-center gap-2"><MousePointer2 size={14} /> {t('guide.tips.dnd')}</div>
-                                <div className="text-zinc-600 leading-relaxed text-xs">{t('guide.tips.dndDesc')}</div>
-                            </li>
-                             <li className="bg-zinc-50 p-3 rounded border border-zinc-100">
-                                <div className="font-bold mb-1 flex items-center gap-2"><Zap size={14} /> {t('guide.tips.jump')}</div>
-                                <div className="text-zinc-600 leading-relaxed text-xs">{t('guide.tips.jumpDesc')}</div>
-                            </li>
-                        </ul>
-                    </div>
-
-                     <div>
-                        <h4 className="font-bold uppercase text-xs text-zinc-400 mb-3 tracking-wider">{t('guide.shortcuts.title')}</h4>
-                         <div className="grid grid-cols-1 gap-2 text-sm">
-                             <div className="flex justify-between items-center p-2 border border-zinc-100 rounded">
-                                 <span className="text-zinc-600">Copy Node</span>
-                                 <div className="flex gap-1"><kbd className="bg-zinc-100 border border-zinc-300 px-1.5 py-0.5 rounded text-xs font-mono">Alt</kbd> <span className="text-zinc-400">+</span> <span className="text-xs">Drag</span></div>
-                             </div>
-                             <div className="flex justify-between items-center p-2 border border-zinc-100 rounded">
-                                 <span className="text-zinc-600">Fold/Unfold (Text)</span>
-                                 <div className="flex gap-1"><kbd className="bg-zinc-100 border border-zinc-300 px-1.5 py-0.5 rounded text-xs font-mono">Ctrl</kbd> <span className="text-zinc-400">+</span> <kbd className="bg-zinc-100 border border-zinc-300 px-1.5 py-0.5 rounded text-xs font-mono">Shift</kbd> <span className="text-zinc-400">+</span> <kbd className="bg-zinc-100 border border-zinc-300 px-1.5 py-0.5 rounded text-xs font-mono">[</kbd></div>
-                             </div>
-                         </div>
-                     </div>
-                </div>
-            </Modal>
+            <AboutModal isOpen={isAboutOpen} onClose={() => setIsAboutOpen(false)} />
         </>
     );
 };
 
-export default function App() {
-    return (
-        <LanguageProvider>
-            <MainApp />
-        </LanguageProvider>
-    );
-}
+const App: React.FC = () => {
+  return (
+    <LanguageProvider>
+       <MainApp />
+    </LanguageProvider>
+  );
+};
+
+export default App;

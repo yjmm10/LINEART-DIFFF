@@ -60,8 +60,9 @@ interface JsonEditorProps {
   onFocusPath?: (path: string) => void;
   // Command passed from parent to force children to expand/collapse
   recursiveCommand?: RecursiveCommand;
-  // Zone for sync context (e.g. 'editor', 'editor-base', 'editor-current')
+  // Sync Props
   syncZone?: string;
+  syncTarget?: string; 
 }
 
 const getDataType = (data: any): 'object' | 'array' | 'string' | 'number' | 'boolean' | 'null' => {
@@ -110,7 +111,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   index,
   onFocusPath,
   recursiveCommand,
-  syncZone = 'editor'
+  syncZone = 'editor',
+  syncTarget = 'diff'
 }) => {
   // Initialize isOpen state. Prioritize recursiveCommand if present.
   const [isOpen, setIsOpen] = useState(() => {
@@ -172,7 +174,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       if (recursiveCommand && recursiveCommand.id !== lastParentCmdId.current) {
           lastParentCmdId.current = recursiveCommand.id;
           
-          // 1. Update internal state so we pass this command down to children
+          // 1. Update internal state so we pass this command down to our children
           setInternalCommand(recursiveCommand);
           
           // 2. Update our own open state (unless we are root)
@@ -459,7 +461,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   const childCount = isContainer ? Object.keys(data).length : 0;
   const isRef = typeof localValue === 'string' && localValue.startsWith('#/');
 
-  const handleSyncJump = (e: React.MouseEvent) => { e.stopPropagation(); syncTo('diff', currentPath); };
+  const handleSyncJump = (e: React.MouseEvent) => { e.stopPropagation(); syncTo(syncTarget, currentPath); };
 
   // --- Render ---
 
@@ -508,7 +510,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                spellCheck={false}
                onDoubleClick={(e) => e.stopPropagation()} 
              />
-             <span className="text-zinc-400 cursor-pointer hover:text-accent hover:font-bold transition-colors px-0.5 select-none" onClick={(e) => { e.stopPropagation(); syncTo('diff', currentPath); }} title="Reveal in Diff View">:</span>
+             <span className="text-zinc-400 cursor-pointer hover:text-accent hover:font-bold transition-colors px-0.5 select-none" onClick={(e) => { e.stopPropagation(); syncTo(syncTarget, currentPath); }} title="Reveal in Sync Target">:</span>
           </div>
         )}
 
@@ -537,7 +539,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                 onDoubleClick={(e) => e.stopPropagation()}
                 title={localValue === null ? 'null' : localValue.toString()}
               />
-              {isRef && <button onClick={(e) => { e.stopPropagation(); syncTo('editor', localValue); }} className="ml-2 text-zinc-400 hover:text-accent p-0.5 hover:bg-blue-50 rounded transition-colors" title="Jump to definition"><ExternalLink size={12} /></button>}
+              {isRef && <button onClick={(e) => { e.stopPropagation(); syncTo(syncZone, localValue); }} className="ml-2 text-zinc-400 hover:text-accent p-0.5 hover:bg-blue-50 rounded transition-colors" title="Jump to definition"><ExternalLink size={12} /></button>}
           </div>
         )}
 
@@ -593,6 +595,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                   onFocusPath={onFocusPath}
                   recursiveCommand={internalCommand}
                   syncZone={syncZone}
+                  syncTarget={syncTarget}
                 />
              ))
           ) : (
@@ -610,6 +613,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                  onFocusPath={onFocusPath}
                  recursiveCommand={internalCommand}
                  syncZone={syncZone}
+                 syncTarget={syncTarget}
                />
             ))
           )}
