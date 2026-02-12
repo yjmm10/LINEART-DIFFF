@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import CodeMirror, { EditorView } from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
 
@@ -75,12 +75,43 @@ const lineArtTheme = EditorView.theme({
 }, { dark: false });
 
 const CodeEditor: React.FC<CodeEditorProps> = ({ value, onChange, onEditorCreate, onBlur, onCursorActivity, readOnly }) => {
+    
+    // Memoize extensions and setup to prevent reconfiguration loops on render
+    const extensions = useMemo(() => [json()], []);
+    
+    const basicSetup = useMemo(() => ({
+        lineNumbers: true,
+        highlightActiveLineGutter: true,
+        highlightSpecialChars: true,
+        history: true,
+        foldGutter: true, // Enables the folding arrow in gutter
+        drawSelection: true,
+        dropCursor: true,
+        allowMultipleSelections: false,
+        indentOnInput: true,
+        syntaxHighlighting: true,
+        bracketMatching: true,
+        closeBrackets: true,
+        autocompletion: true,
+        rectangularSelection: true,
+        crosshairCursor: false,
+        highlightActiveLine: true,
+        highlightSelectionMatches: true,
+        closeBracketsKeymap: true,
+        defaultKeymap: true,
+        searchKeymap: true,
+        historyKeymap: true,
+        foldKeymap: true, // Enables Ctrl+Shift+[ / ]
+        completionKeymap: true,
+        lintKeymap: true,
+    }), []);
+
     return (
         <CodeMirror
             value={value}
             height="100%"
             theme={lineArtTheme}
-            extensions={[json()]}
+            extensions={extensions}
             onChange={onChange}
             onCreateEditor={onEditorCreate}
             onUpdate={(update) => {
@@ -92,32 +123,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ value, onChange, onEditorCreate
                 }
             }}
             readOnly={readOnly}
-            basicSetup={{
-                lineNumbers: true,
-                highlightActiveLineGutter: true,
-                highlightSpecialChars: true,
-                history: true,
-                foldGutter: true, // Enables the folding arrow in gutter
-                drawSelection: true,
-                dropCursor: true,
-                allowMultipleSelections: false,
-                indentOnInput: true,
-                syntaxHighlighting: true,
-                bracketMatching: true,
-                closeBrackets: true,
-                autocompletion: true,
-                rectangularSelection: true,
-                crosshairCursor: false,
-                highlightActiveLine: true,
-                highlightSelectionMatches: true,
-                closeBracketsKeymap: true,
-                defaultKeymap: true,
-                searchKeymap: true,
-                historyKeymap: true,
-                foldKeymap: true, // Enables Ctrl+Shift+[ / ]
-                completionKeymap: true,
-                lintKeymap: true,
-            }}
+            basicSetup={basicSetup}
             className="h-full text-sm"
         />
     );
