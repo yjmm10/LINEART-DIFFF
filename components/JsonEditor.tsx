@@ -106,7 +106,6 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   const [localValue, setLocalValue] = useState(data);
   
   // Interaction States
-  const [isAdding, setIsAdding] = useState(false);
   const [isChangingType, setIsChangingType] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
 
@@ -199,8 +198,20 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       newObj[`new_key_${i}`] = newValue;
       onChange(newObj);
     }
-    setIsAdding(false);
     setIsOpen(true); 
+  };
+
+  const handleDirectAdd = () => {
+    let targetType = 'string';
+    if (Array.isArray(data) && data.length > 0) {
+       targetType = getDataType(data[0]);
+    } else if (typeof data === 'object' && data !== null) {
+       const keys = Object.keys(data);
+       if (keys.length > 0) {
+          targetType = getDataType(data[keys[0]]);
+       }
+    }
+    handleAddChild(targetType);
   };
 
   const handleChangeType = (newType: string) => {
@@ -210,13 +221,29 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
 
   const handleCopy = (e: React.MouseEvent) => {
       e.stopPropagation();
-      let content = data;
-      // If fieldKey exists, it implies this is an object property, so wrap it
-      // Array items have index passed but fieldKey is undefined
+      let textToCopy = "";
+
       if (fieldKey !== undefined) {
-         content = { [fieldKey]: data };
+         // Create a wrapper to use JSON.stringify for formatting (e.g. quotes handling)
+         const wrapper = { [fieldKey]: data };
+         const json = JSON.stringify(wrapper, null, 2);
+         const lines = json.split('\n');
+         
+         if (lines.length >= 3) {
+             // Remove first line ({) and last line (})
+             // Remove 2-space indentation from the remaining lines
+             textToCopy = lines.slice(1, -1)
+                .map(line => line.startsWith('  ') ? line.substring(2) : line)
+                .join('\n');
+         } else {
+             // Fallback for compact cases e.g. {"a":1} -> "a":1
+             textToCopy = json.trim().replace(/^{/, '').replace(/}$/, '').trim();
+         }
+      } else {
+         textToCopy = JSON.stringify(data, null, 2);
       }
-      navigator.clipboard.writeText(JSON.stringify(content, null, 2));
+
+      navigator.clipboard.writeText(textToCopy);
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
   };
@@ -525,15 +552,18 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
 
            {isContainer && (
              <div className="relative">
-                <button onClick={(e) => { e.stopPropagation(); setIsAdding(!isAdding); }} className={`p-1 hover:bg-emerald-100 text-emerald-600 rounded ${isAdding ? 'bg-emerald-100' : ''}`}>
+                <button 
+                  onClick={(e) => { e.stopPropagation(); handleDirectAdd(); }} 
+                  className="p-1 hover:bg-emerald-100 text-emerald-600 rounded"
+                  title="Add Field"
+                >
                     <Plus size={14} />
                 </button>
-                {isAdding && <TypeSelector onSelect={handleAddChild} onCancel={() => setIsAdding(false)} />}
              </div>
            )}
 
            <div className="relative">
-                <button onClick={(e) => { e.stopPropagation(); setIsChangingType(!isChangingType); }} className={`p-1 hover:bg-blue-100 text-blue-600 rounded ${isChangingType ? 'bg-blue-100' : ''}`}>
+                <button onClick={(e) => { e.stopPropagation(); setIsChangingType(!isChangingType); }} className={`p-1 hover:bg-blue-100 text-blue-600 rounded ${isChangingType ? 'bg-blue-100' : ''}`} title="Change Type">
                    <FileType size={14} />
                 </button>
                 {isChangingType && <TypeSelector onSelect={handleChangeType} onCancel={() => setIsChangingType(false)} />}

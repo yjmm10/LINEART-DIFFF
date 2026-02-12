@@ -52,7 +52,8 @@ export const SyncProvider: React.FC<{children: React.ReactNode}> = ({children}) 
             const selector = `[data-sync-id="${getKey(targetZone, path)}"]`;
             const el = document.querySelector(selector);
             if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // Use block: 'start' to ensure the element header is visible at the top
+                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 el.classList.add('bg-yellow-100/50', 'ring-2', 'ring-yellow-400', 'rounded');
                 setTimeout(() => {
                     el.classList.remove('bg-yellow-100/50', 'ring-2', 'ring-yellow-400', 'rounded');
