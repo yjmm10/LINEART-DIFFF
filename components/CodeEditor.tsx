@@ -76,36 +76,9 @@ const lineArtTheme = EditorView.theme({
 
 const CodeEditor: React.FC<CodeEditorProps> = ({ value, onChange, onEditorCreate, onBlur, onCursorActivity, readOnly }) => {
     
-    // Memoize extensions and setup to prevent reconfiguration loops on render
+    // Memoize extensions
     const extensions = useMemo(() => [json()], []);
     
-    const basicSetup = useMemo(() => ({
-        lineNumbers: true,
-        highlightActiveLineGutter: true,
-        highlightSpecialChars: true,
-        history: true,
-        foldGutter: true, // Enables the folding arrow in gutter
-        drawSelection: true,
-        dropCursor: true,
-        allowMultipleSelections: false,
-        indentOnInput: true,
-        syntaxHighlighting: true,
-        bracketMatching: true,
-        closeBrackets: true,
-        autocompletion: true,
-        rectangularSelection: true,
-        crosshairCursor: false,
-        highlightActiveLine: true,
-        highlightSelectionMatches: true,
-        closeBracketsKeymap: true,
-        defaultKeymap: true,
-        searchKeymap: true,
-        historyKeymap: true,
-        foldKeymap: true, // Enables Ctrl+Shift+[ / ]
-        completionKeymap: true,
-        lintKeymap: true,
-    }), []);
-
     return (
         <CodeMirror
             value={value}
@@ -123,7 +96,10 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ value, onChange, onEditorCreate
                 }
             }}
             readOnly={readOnly}
-            basicSetup={basicSetup}
+            // Use standard basicSetup (boolean) to avoid configuration object conflicts
+            // which can trigger "Unrecognized extension" errors due to version mismatches
+            // Default basicSetup includes foldGutter, lineNumbers, etc.
+            basicSetup={true}
             className="h-full text-sm"
         />
     );
