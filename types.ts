@@ -33,6 +33,12 @@ export interface Snapshot {
     data: any;
 }
 
+export interface HistoryState {
+    base: any;
+    current: any;
+    timestamp: number;
+}
+
 export interface Workspace {
     id: string;
     name: string;
@@ -40,6 +46,8 @@ export interface Workspace {
     currentJson: any;     // The "Modified"
     lastModified: number;
     snapshots: Snapshot[];
+    history: HistoryState[];
+    future: HistoryState[];
 }
 
 export type ExportMode = 'latest' | 'diff' | 'project';

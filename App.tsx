@@ -1,4 +1,5 @@
 
+
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { 
   GitBranch, 
@@ -38,15 +39,20 @@ import {
   Zap,
   Columns,
   SquareSplitHorizontal,
-  FoldVertical
+  FoldVertical,
+  Unlink,
+  Undo2,
+  Redo2,
+  Link2,
+  Link2Off
 } from 'lucide-react';
 import { Button, Card, Modal, Input, Label, Select } from './components/ui';
 import JsonTree from './components/JsonTree';
 import { JsonEditor } from './components/JsonEditor';
 import CodeEditor from './components/CodeEditor';
 import { SyncProvider, useSync } from './components/SyncContext';
-import { safeParse, generateDiff, downloadJson, isProjectFile, getPathFromIndex, getIndexFromPath } from './utils';
-import { DiffNode, DiffType, Workspace, ExportMode, Snapshot } from './types';
+import { safeParse, generateDiff, downloadJson, isProjectFile, getPathFromIndex, getIndexFromPath, resolveReferences } from './utils';
+import { DiffNode, DiffType, Workspace, ExportMode, Snapshot, HistoryState } from './types';
 import { LanguageProvider, useLanguage } from './translations';
 import { LandingPage } from './components/LandingPage';
 import { EditorView } from '@uiw/react-codemirror';
@@ -67,7 +73,9 @@ const DEFAULT_WORKSPACE: Workspace = {
     baseJson: null,
     currentJson: INITIAL_JSON_DATA,
     lastModified: Date.now(),
-    snapshots: []
+    snapshots: [],
+    history: [],
+    future: []
 };
 
 // --- Minimap Component ---
@@ -150,7 +158,6 @@ interface ViewControllerProps {
     syncZone: string;
     syncTarget?: string;
     autoFollow?: boolean;
-    expandAllTrigger?: number; // Prop to trigger expand all
     isModified?: boolean;
     readOnly?: boolean;
 }
@@ -158,21 +165,20 @@ interface ViewControllerProps {
 const ViewController: React.FC<ViewControllerProps> = ({ 
     title, jsonData, onJsonChange,
     text, setText, viewMode, setViewMode, cursorPos, setCursorPos, activePath, setActivePath,
-    syncZone, syncTarget = 'diff', autoFollow, expandAllTrigger, isModified
+    syncZone, syncTarget = 'diff', autoFollow, isModified
 }) => {
-    const { syncTo } = useSync();
+    const { syncTo, registerZone, unregisterZone } = useSync();
     const { t } = useLanguage();
     const [copyFeedback, setCopyFeedback] = useState(false);
     
     // Reference to the CodeMirror EditorView
     const editorViewRef = useRef<EditorView | null>(null);
     
-    const [editorExpandAll, setEditorExpandAll] = useState(true);
+    // Local Expand State
+    const [recursiveCmd, setRecursiveCmd] = useState<{ type: 'expand' | 'collapse'; id: number } | undefined>(undefined);
 
-    // Watch for global expand trigger
-    useEffect(() => {
-        setEditorExpandAll(true);
-    }, [expandAllTrigger]);
+    const handleExpandAll = () => setRecursiveCmd({ type: 'expand', id: Date.now() });
+    const handleCollapseAll = () => setRecursiveCmd({ type: 'collapse', id: Date.now() });
 
     // Handle Text Changes and Parsing
     const handleTextChange = (newText: string) => setText(newText);
@@ -197,27 +203,43 @@ const ViewController: React.FC<ViewControllerProps> = ({
     };
 
     const handleSwitchToTree = () => {
+        // Force update JSON data from text to ensure sync validity
+        const result = safeParse(text);
+        if (result.parsed && JSON.stringify(result.parsed) !== JSON.stringify(jsonData)) {
+            onJsonChange(result.parsed);
+        }
+
+        let effectivePath = activePath;
         if (editorViewRef.current) {
             // Get cursor position from CodeMirror
             const index = editorViewRef.current.state.selection.main.head;
-            const path = getPathFromIndex(text, index);
-            setActivePath(path);
+            effectivePath = getPathFromIndex(text, index);
+            setActivePath(effectivePath);
         }
+        
         setViewMode('tree');
+        
+        // Pass the locally calculated path to avoid stale state closure issues
         setTimeout(() => {
-            if (activePath) syncTo(syncZone, activePath);
+            if (effectivePath) syncTo(syncZone, effectivePath);
         }, 100);
     };
 
     const handleSwitchToText = () => {
+        // Critical: When switching to text, we must generate the string from the latest Object data
+        // to ensure that any edits made in Tree mode are reflected and the path index calc is accurate.
+        const currentString = JSON.stringify(jsonData, null, 2);
+        setText(currentString);
+
         if (activePath) {
-            const index = getIndexFromPath(text, activePath);
+            const index = getIndexFromPath(currentString, activePath);
             setCursorPos(index);
         }
         setViewMode('text');
     };
 
     const handleFocusPath = (path: string) => {
+        if (path === activePath) return; // Prevent unnecessary updates
         setActivePath(path);
         if (autoFollow) syncTo(syncTarget, path);
     };
@@ -225,11 +247,34 @@ const ViewController: React.FC<ViewControllerProps> = ({
     const handleCursorActivity = (view: EditorView) => {
         if (viewMode === 'text') {
             const index = view.state.selection.main.head;
-            const path = getPathFromIndex(text, index);
+            // Use the text from view state to ensure it's the latest
+            const currentText = view.state.doc.toString();
+            const path = getPathFromIndex(currentText, index);
+            
+            if (path === activePath) return; // Prevent loops and duplicate syncs
+
             setActivePath(path);
             if (autoFollow) syncTo(syncTarget, path);
         }
     };
+
+    // Keep a ref to text so the zone handler always has access to the latest text without re-registering
+    const textRef = useRef(text);
+    useEffect(() => { textRef.current = text; }, [text]);
+
+    // Register Zone Handler for Text Mode Sync
+    useEffect(() => {
+        if (viewMode === 'text') {
+            registerZone(syncZone, (path) => {
+                const index = getIndexFromPath(textRef.current, path);
+                setCursorPos(index);
+            });
+            return () => unregisterZone(syncZone);
+        } else {
+             unregisterZone(syncZone);
+        }
+    }, [viewMode, syncZone, registerZone, unregisterZone]);
+
 
     // Sync Text Cursor when switching back to Text Mode or syncing from other views
     useEffect(() => {
@@ -252,10 +297,19 @@ const ViewController: React.FC<ViewControllerProps> = ({
         setCopyFeedback(true);
         setTimeout(() => setCopyFeedback(false), 2000);
     };
+    
+    const handleResolveRefs = () => {
+        if (jsonData) {
+            const resolved = resolveReferences(jsonData);
+            onJsonChange(resolved);
+            setText(JSON.stringify(resolved, null, 2));
+        }
+    };
 
     const handleObjectChange = (newObj: any) => {
         onJsonChange(newObj);
-        setText(JSON.stringify(newObj, null, 2));
+        // We do NOT update Text immediately here to avoid re-render performance hits
+        // Text is updated when switching modes or via the Text Editor's own change handler
     };
 
     return (
@@ -272,6 +326,22 @@ const ViewController: React.FC<ViewControllerProps> = ({
                                {copyFeedback ? <Check size={14} /> : <Copy size={14} />}
                                <span className="text-xs font-bold hidden xl:inline">{copyFeedback ? t('editor.copied') : t('editor.copy')}</span>
                            </button>
+                           
+                           <button onClick={handleResolveRefs} className="bg-white hover:bg-zinc-100 text-zinc-700 p-1.5 rounded-md border border-zinc-300 shadow-sm transition-all flex items-center gap-1" title={t('editor.resolveRefs')}>
+                              <Unlink size={14} />
+                              <span className="text-xs font-bold hidden xl:inline">{t('editor.resolveRefs')}</span>
+                           </button>
+
+                           {viewMode === 'tree' && (
+                               <>
+                                   <button onClick={handleExpandAll} className="bg-white hover:bg-zinc-100 text-zinc-700 p-1.5 rounded-md border border-zinc-300 shadow-sm transition-all flex items-center gap-1" title={t('header.expandAll')}>
+                                      <Maximize2 size={14} />
+                                   </button>
+                                   <button onClick={handleCollapseAll} className="bg-white hover:bg-zinc-100 text-zinc-700 p-1.5 rounded-md border border-zinc-300 shadow-sm transition-all flex items-center gap-1" title={t('header.collapseAll')}>
+                                      <Minimize2 size={14} />
+                                   </button>
+                               </>
+                           )}
 
                            {viewMode === 'text' && (
                                <button onClick={formatJson} className="bg-white hover:bg-zinc-100 text-zinc-700 p-1.5 rounded-md border border-zinc-300 shadow-sm transition-all flex items-center gap-1" title={t('editor.format')}>
@@ -308,15 +378,15 @@ const ViewController: React.FC<ViewControllerProps> = ({
                        <div className="absolute inset-0 overflow-auto p-4 bg-white">
                             {jsonData ? (
                                <JsonEditor 
-                                    key={`editor-${expandAllTrigger}`} 
                                     data={jsonData} 
                                     onChange={handleObjectChange} 
                                     isRoot={true} 
-                                    defaultOpen={editorExpandAll} 
+                                    defaultOpen={true} 
                                     path="#" 
                                     onFocusPath={handleFocusPath} 
-                                    syncZone={syncZone}
+                                    syncZone={syncZone} 
                                     syncTarget={syncTarget}
+                                    recursiveCommand={recursiveCmd}
                                />
                             ) : (
                                <div className="text-zinc-400 text-center mt-10 font-mono text-sm">{t('editor.invalid')}</div>
@@ -373,7 +443,13 @@ const EditorWorkspace: React.FC<{
   const [workspaces, setWorkspaces] = useState<Workspace[]>(() => {
       const saved = localStorage.getItem('lineart_workspaces');
       let parsed = saved ? JSON.parse(saved) : [DEFAULT_WORKSPACE];
-      if (Array.isArray(parsed)) parsed = parsed.map((w: any) => ({ ...w, snapshots: w.snapshots || [] }));
+      // Migration for old data structure
+      if (Array.isArray(parsed)) parsed = parsed.map((w: any) => ({ 
+          ...w, 
+          snapshots: w.snapshots || [],
+          history: w.history || [],
+          future: w.future || []
+      }));
       return parsed;
   });
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(() => localStorage.getItem('lineart_active_id') || 'default');
@@ -423,6 +499,7 @@ const EditorWorkspace: React.FC<{
   const [compareBaseFile, setCompareBaseFile] = useState<any>(null);
   const [compareCurrentFile, setCompareCurrentFile] = useState<any>(null);
 
+  // Local Diff Tree State Controls
   const [expandAllKey, setExpandAllKey] = useState(0);
   const [diffExpandMode, setDiffExpandMode] = useState<'all' | 'none' | 'smart'>('smart');
 
@@ -436,7 +513,26 @@ const EditorWorkspace: React.FC<{
       setWorkspaces(prev => prev.map(w => w.id === activeWorkspaceId ? { ...w, ...updates, lastModified: Date.now() } : w));
   };
 
+  const pushToHistory = () => {
+      const currentState: HistoryState = {
+          base: JSON.parse(JSON.stringify(activeWorkspace.baseJson)),
+          current: JSON.parse(JSON.stringify(activeWorkspace.currentJson)),
+          timestamp: Date.now()
+      };
+      
+      const newHistory = [...(activeWorkspace.history || []), currentState];
+      if (newHistory.length > 50) newHistory.shift(); // Limit history
+
+      updateActiveWorkspace({
+          history: newHistory,
+          future: [] // Clear future on new change
+      });
+  };
+
   const handleJsonChange = (type: 'base' | 'current', newJson: any) => {
+      // Push current state to history before updating
+      pushToHistory();
+
       if (type === 'current') {
           updateActiveWorkspace({ currentJson: newJson });
           currentEditor.handleJsonUpdate(newJson);
@@ -446,6 +542,87 @@ const EditorWorkspace: React.FC<{
       }
   };
 
+  const handleUndo = useCallback(() => {
+      const history = activeWorkspace.history || [];
+      if (history.length === 0) return;
+
+      const previousState = history[history.length - 1];
+      const newHistory = history.slice(0, -1);
+
+      const currentState: HistoryState = {
+          base: activeWorkspace.baseJson,
+          current: activeWorkspace.currentJson,
+          timestamp: Date.now()
+      };
+      
+      const newFuture = [currentState, ...(activeWorkspace.future || [])];
+
+      updateActiveWorkspace({
+          baseJson: previousState.base,
+          currentJson: previousState.current,
+          history: newHistory,
+          future: newFuture
+      });
+      
+      // Update editors
+      currentEditor.handleJsonUpdate(previousState.current);
+      baseEditor.handleJsonUpdate(previousState.base);
+
+  }, [activeWorkspace, updateActiveWorkspace, currentEditor, baseEditor]);
+
+  const handleRedo = useCallback(() => {
+      const future = activeWorkspace.future || [];
+      if (future.length === 0) return;
+
+      const nextState = future[0];
+      const newFuture = future.slice(1);
+
+      const currentState: HistoryState = {
+          base: activeWorkspace.baseJson,
+          current: activeWorkspace.currentJson,
+          timestamp: Date.now()
+      };
+
+      const newHistory = [...(activeWorkspace.history || []), currentState];
+
+      updateActiveWorkspace({
+          baseJson: nextState.base,
+          currentJson: nextState.current,
+          history: newHistory,
+          future: newFuture
+      });
+
+      // Update editors
+      currentEditor.handleJsonUpdate(nextState.current);
+      baseEditor.handleJsonUpdate(nextState.base);
+
+  }, [activeWorkspace, updateActiveWorkspace, currentEditor, baseEditor]);
+
+  // Keyboard Shortcuts for Undo/Redo
+  useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+          const target = e.target as HTMLElement;
+          // Ignore if focus is in an Input or Textarea (CodeMirror or Native Inputs), let them handle text undo
+          const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+          
+          if (isInput) return;
+
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+              e.preventDefault();
+              if (e.shiftKey) handleRedo();
+              else handleUndo();
+          }
+          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+              e.preventDefault();
+              handleRedo();
+          }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleUndo, handleRedo]);
+
+
   const handleCreateWorkspace = () => {
       if(!newWorkspaceName.trim()) return;
       const newSpace: Workspace = {
@@ -454,7 +631,9 @@ const EditorWorkspace: React.FC<{
           baseJson: null,
           currentJson: {},
           lastModified: Date.now(),
-          snapshots: []
+          snapshots: [],
+          history: [],
+          future: []
       };
       setWorkspaces([...workspaces, newSpace]);
       setActiveWorkspaceId(newSpace.id);
@@ -494,6 +673,8 @@ const EditorWorkspace: React.FC<{
 
   const handleRestoreSnapshot = (snapshot: Snapshot) => {
       if (window.confirm(`${t('modals.snapshots.restore')} "${snapshot.name}"?`)) {
+          // Push current state to history before restore
+          pushToHistory();
           updateActiveWorkspace({ currentJson: JSON.parse(JSON.stringify(snapshot.data)) });
           // Note: useEffect in useEditorState handles text update
           setIsSnapshotModalOpen(false);
@@ -515,25 +696,27 @@ const EditorWorkspace: React.FC<{
   };
 
   // Logic Handlers
-  const handleSetOriginal = () => updateActiveWorkspace({ baseJson: JSON.parse(JSON.stringify(activeWorkspace.currentJson)) });
+  const handleSetOriginal = () => {
+      pushToHistory();
+      updateActiveWorkspace({ baseJson: JSON.parse(JSON.stringify(activeWorkspace.currentJson)) });
+  };
+  
   const handleReset = () => {
     if (activeWorkspace.baseJson) {
+      pushToHistory();
       updateActiveWorkspace({ currentJson: JSON.parse(JSON.stringify(activeWorkspace.baseJson)) });
     }
   };
   
-  const handleExpandAll = () => { 
-      setExpandAllKey(k => k + 1); // Triggers effect in sub-components
+  const handleDiffExpandAll = () => { 
+      setExpandAllKey(k => k + 1); 
       setDiffExpandMode('all'); 
   };
-  const handleCollapseAll = () => { 
-      // We don't have a direct "Collapse All" trigger for Editor yet except manual defaultOpen=false
-      // But we can trigger re-render with defaultOpen={false} maybe?
-      // For now mostly affects Diff
+  const handleDiffCollapseAll = () => { 
       setDiffExpandMode('none'); 
       setExpandAllKey(k => k + 1); 
   };
-  const handleSmartExpand = () => { setDiffExpandMode('smart'); setExpandAllKey(k => k + 1); };
+  const handleDiffSmartExpand = () => { setDiffExpandMode('smart'); setExpandAllKey(k => k + 1); };
 
   const handleExport = () => {
       const baseName = exportFilename;
@@ -551,6 +734,7 @@ const EditorWorkspace: React.FC<{
         const text = ev.target?.result as string;
         const result = safeParse(text);
         if (result.parsed) {
+            pushToHistory();
             const data = result.parsed;
             if (isProjectFile(data)) {
                 updateActiveWorkspace({ baseJson: data.base, currentJson: data.current });
@@ -582,6 +766,7 @@ const EditorWorkspace: React.FC<{
 
   const applyCompare = () => {
       if (compareCurrentFile) {
+          pushToHistory();
           updateActiveWorkspace({ baseJson: compareBaseFile, currentJson: compareCurrentFile });
           setIsCompareModalOpen(false);
           setCompareBaseFile(null);
@@ -625,6 +810,8 @@ const EditorWorkspace: React.FC<{
   }, [diffTree]);
 
   const isInitialized = !!activeWorkspace.baseJson;
+  const canUndo = (activeWorkspace.history || []).length > 0;
+  const canRedo = (activeWorkspace.future || []).length > 0;
   
   return (
     <div className="h-screen flex font-sans text-zinc-900 bg-zinc-50 overflow-hidden">
@@ -704,10 +891,13 @@ const EditorWorkspace: React.FC<{
              </div>
 
              <div className="flex items-center gap-2">
-                 <Button onClick={handleExpandAll} variant="secondary" className="px-3" title={t('header.expandAll')}><Maximize2 size={16} /></Button>
-                 <Button onClick={handleCollapseAll} variant="secondary" className="px-3" title={t('header.collapseAll')}><Minimize2 size={16} /></Button>
-                 {isInitialized && <Button onClick={handleSmartExpand} variant={diffExpandMode === 'smart' ? 'primary' : 'secondary'} className="px-3" title={t('header.smartExpand')}><ListFilter size={16} /></Button>}
-                 <div className="w-[1px] h-6 bg-zinc-300 mx-2"></div>
+                 {isInitialized && <button onClick={() => setAutoFollow(!autoFollow)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs uppercase font-bold border transition-colors ${autoFollow ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-white text-zinc-400 border-zinc-200 hover:border-zinc-300 hover:text-zinc-600'}`} title={t('diff.autoFollow')}>{autoFollow ? <Link2 size={16}/> : <Link2Off size={16}/>}<span className="hidden xl:inline">{t('diff.autoFollow')}</span></button>}
+                 <div className="flex bg-zinc-100 rounded-md border border-zinc-200 mr-2">
+                     <button disabled={!canUndo} onClick={handleUndo} className="p-2 hover:bg-white rounded-l text-zinc-600 hover:text-black disabled:opacity-30 disabled:hover:bg-transparent" title="Undo (Ctrl+Z)"><Undo2 size={16} /></button>
+                     <div className="w-[1px] bg-zinc-200"></div>
+                     <button disabled={!canRedo} onClick={handleRedo} className="p-2 hover:bg-white rounded-r text-zinc-600 hover:text-black disabled:opacity-30 disabled:hover:bg-transparent" title="Redo (Ctrl+Y)"><Redo2 size={16} /></button>
+                 </div>
+                 
                  <Button variant="secondary" onClick={() => setIsSnapshotModalOpen(true)} icon={<History size={16} />} title={t('header.snapshots')} className="relative"><span className="hidden sm:inline">{t('header.snapshots')}</span>{(activeWorkspace.snapshots?.length || 0) > 0 && <span className="absolute -top-2 -right-2 w-5 h-5 bg-black text-white rounded-full text-[10px] flex items-center justify-center border border-white">{activeWorkspace.snapshots.length}</span>}</Button>
                  {!isInitialized ? <Button onClick={handleSetOriginal} icon={<ArrowLeftRight size={16}/>} className="whitespace-nowrap">{t('header.setOriginal')}</Button> : <><Button variant="secondary" onClick={handleReset} icon={<RotateCcw size={16} />} title={t('header.reset')}></Button><Button onClick={() => updateActiveWorkspace({ baseJson: null })} variant="danger" icon={<FileText size={16} />} title={t('header.clear')}></Button></>}
              </div>
@@ -728,7 +918,6 @@ const EditorWorkspace: React.FC<{
                             syncTarget="editor-current"
                             {...baseEditor}
                             autoFollow={autoFollow}
-                            expandAllTrigger={expandAllKey}
                         />
                     ) : (
                          /* Diff Mode: Left Panel = Current Editor */
@@ -740,7 +929,6 @@ const EditorWorkspace: React.FC<{
                             syncTarget="diff"
                             {...currentEditor}
                             autoFollow={autoFollow}
-                            expandAllTrigger={expandAllKey}
                             isModified={isInitialized}
                         />
                     )}
@@ -761,7 +949,6 @@ const EditorWorkspace: React.FC<{
                             syncTarget="editor-base"
                             {...currentEditor}
                             autoFollow={autoFollow}
-                            expandAllTrigger={expandAllKey}
                             isModified={true}
                         />
                     ) : (
@@ -771,13 +958,26 @@ const EditorWorkspace: React.FC<{
                                 <div className="flex items-center gap-2">
                                     <h2 className="font-bold text-lg flex items-center gap-2"><ArrowLeftRight className="text-emerald-600" /> {t('diff.title')}</h2>
                                     {isInitialized && <span className="text-xs font-mono text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded">{t('diff.view')}</span>}
-                                    {isInitialized && <button onClick={() => setAutoFollow(!autoFollow)} className={`flex items-center gap-1.5 px-2 py-1 ml-2 rounded text-[10px] uppercase font-bold border transition-colors ${autoFollow ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-white text-zinc-400 border-zinc-200 hover:border-zinc-300 hover:text-zinc-600'}`} title={t('diff.autoFollow')}><div className={`w-1.5 h-1.5 rounded-full ${autoFollow ? 'bg-blue-500 animate-pulse' : 'bg-zinc-300'}`} />{t('diff.autoFollow')}</button>}
                                 </div>
-                                {isInitialized && <div className="flex gap-2"><span title="Total Added Lines" className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100">+{stats.added}</span><span title="Total Removed Lines" className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded border border-rose-100">-{stats.removed}</span><span title="Total Modified Fields" className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100">~{stats.modified}</span></div>}
+                                {isInitialized && <div className="flex gap-2">
+                                     <button onClick={handleDiffExpandAll} className="bg-white hover:bg-zinc-100 text-zinc-700 p-1.5 rounded-md border border-zinc-300 shadow-sm transition-all flex items-center gap-1" title={t('header.expandAll')}>
+                                        <Maximize2 size={14} />
+                                     </button>
+                                     <button onClick={handleDiffCollapseAll} className="bg-white hover:bg-zinc-100 text-zinc-700 p-1.5 rounded-md border border-zinc-300 shadow-sm transition-all flex items-center gap-1" title={t('header.collapseAll')}>
+                                        <Minimize2 size={14} />
+                                     </button>
+                                     <button onClick={handleDiffSmartExpand} className={`p-1.5 rounded-md border shadow-sm transition-all flex items-center gap-1 ${diffExpandMode === 'smart' ? 'bg-zinc-800 text-white border-black' : 'bg-white hover:bg-zinc-100 text-zinc-700 border-zinc-300'}`} title={t('header.smartExpand')}>
+                                        <ListFilter size={14} />
+                                     </button>
+                                     
+                                     <div className="w-[1px] h-6 bg-zinc-200 mx-1"></div>
+
+                                     <span title="Total Added Lines" className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100">+{stats.added}</span><span title="Total Removed Lines" className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded border border-rose-100">-{stats.removed}</span><span title="Total Modified Fields" className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100">~{stats.modified}</span>
+                                </div>}
                             </div>
                             <Card className="flex-1 bg-white min-h-0 relative">
                                 <div ref={diffScrollRef} className="absolute inset-0 overflow-auto p-4 pr-6 scroll-smooth">
-                                    {isInitialized && activeWorkspace.baseJson ? ( diffTree ? <JsonTree key={`diff-${expandAllKey}`} data={diffTree} isRoot={true} expandMode={diffExpandMode} path="#" /> : <div className="flex flex-col items-center justify-center h-full text-zinc-400"><p>{t('diff.noChanges')}</p></div> ) : <div className="flex flex-col items-center justify-center h-full text-zinc-400 opacity-60 text-center px-8"><div className="border-2 border-dashed border-zinc-300 p-6 rounded-lg mb-4"><FileText size={48} className="text-zinc-300" /></div><p className="font-bold text-zinc-600">{t('diff.noBase')}</p><p className="text-sm mt-2 max-w-xs">{t('diff.noBaseDesc')}</p></div>}
+                                    {isInitialized && activeWorkspace.baseJson ? ( diffTree ? <JsonTree key={`diff-${expandAllKey}`} data={diffTree} isRoot={true} expandMode={diffExpandMode} path="#" onFocusPath={(p) => { if(autoFollow) currentEditor.setActivePath(p); if(autoFollow) useSync().syncTo('editor', p); }} /> : <div className="flex flex-col items-center justify-center h-full text-zinc-400"><p>{t('diff.noChanges')}</p></div> ) : <div className="flex flex-col items-center justify-center h-full text-zinc-400 opacity-60 text-center px-8"><div className="border-2 border-dashed border-zinc-300 p-6 rounded-lg mb-4"><FileText size={48} className="text-zinc-300" /></div><p className="font-bold text-zinc-600">{t('diff.noBase')}</p><p className="text-sm mt-2 max-w-xs">{t('diff.noBaseDesc')}</p></div>}
                                 </div>
                                 {isInitialized && <DiffMinimap scrollContainerRef={diffScrollRef} triggerUpdate={diffTree} />}
                             </Card>
@@ -925,6 +1125,14 @@ const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen
                   <div className="flex items-center justify-between bg-white p-2 rounded border border-zinc-200">
                       <span>{t('guide.shortcuts.expand')}</span>
                       <kbd className="font-mono bg-zinc-50 border border-zinc-200 px-1.5 py-0.5 rounded text-[10px] text-zinc-500">Click</kbd>
+                  </div>
+                  <div className="flex items-center justify-between bg-white p-2 rounded border border-zinc-200">
+                      <span>Undo</span>
+                      <kbd className="font-mono bg-zinc-50 border border-zinc-200 px-1.5 py-0.5 rounded text-[10px] text-zinc-500">Ctrl+Z</kbd>
+                  </div>
+                  <div className="flex items-center justify-between bg-white p-2 rounded border border-zinc-200">
+                      <span>Redo</span>
+                      <kbd className="font-mono bg-zinc-50 border border-zinc-200 px-1.5 py-0.5 rounded text-[10px] text-zinc-500">Ctrl+Y</kbd>
                   </div>
               </div>
           </section>

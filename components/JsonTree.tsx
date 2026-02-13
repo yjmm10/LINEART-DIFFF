@@ -1,7 +1,8 @@
 
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useEffect, useRef } from 'react';
 import { DiffNode, DiffType } from '../types';
-import { ChevronRight, ChevronDown, Copy, Check } from 'lucide-react';
+import { ChevronRight, ChevronDown, Copy, Check, FoldVertical, UnfoldVertical } from 'lucide-react';
 import { useSync } from './SyncContext';
 
 interface JsonTreeProps {
@@ -10,37 +11,30 @@ interface JsonTreeProps {
   expandMode?: 'all' | 'none' | 'smart';
   path?: string;
   parentIsArray?: boolean;
+  onFocusPath?: (path: string) => void;
+  recursiveCommand?: RecursiveCommand;
 }
 
-const CopyButton = ({ getValue }: { getValue: () => string }) => {
-    const [copied, setCopied] = useState(false);
-    return (
-        <button
-            onClick={(e) => {
-                e.stopPropagation();
-                navigator.clipboard.writeText(getValue());
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-            }}
-            className={`opacity-0 group-hover:opacity-100 transition-all p-1 rounded ml-auto mr-2 shrink-0 ${
-                copied ? 'text-emerald-600 bg-emerald-50' : 'text-zinc-400 hover:text-black hover:bg-zinc-200'
-            }`}
-            title="Copy content"
-        >
-            {copied ? <Check size={12} /> : <Copy size={12} />}
-        </button>
-    );
-};
+// --- Recursive Command Interface (Matches Editor) ---
+interface RecursiveCommand {
+    type: 'expand' | 'collapse';
+    id: number;
+}
 
 const JsonTree: React.FC<JsonTreeProps> = React.memo(({ 
     data, 
     isRoot = false, 
     expandMode = 'all', 
     path = '#', 
-    parentIsArray = false 
+    parentIsArray = false,
+    onFocusPath,
+    recursiveCommand
 }) => {
-  // Determine initial open state based on expandMode
+  // Determine initial open state based on expandMode or command
   const getInitialOpen = () => {
+      if (recursiveCommand) {
+          return recursiveCommand.type === 'expand';
+      }
       if (expandMode === 'all') return true;
       if (expandMode === 'none') return false;
       if (expandMode === 'smart') {
@@ -50,7 +44,33 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
   };
 
   const [isOpen, setIsOpen] = useState<boolean>(getInitialOpen);
-  
+  const [internalCommand, setInternalCommand] = useState<RecursiveCommand | undefined>(recursiveCommand);
+  const lastParentCmdId = useRef<number>(recursiveCommand?.id || 0);
+
+  // --- Recursive Command Synchronization ---
+  // If the parent passes a NEW recursive command (ID changed), we must adopt it.
+  useEffect(() => {
+      if (recursiveCommand && recursiveCommand.id !== lastParentCmdId.current) {
+          lastParentCmdId.current = recursiveCommand.id;
+          
+          // 1. Update internal state so we pass this command down to our children
+          setInternalCommand(recursiveCommand);
+          
+          // 2. Update our own open state (unless we are root)
+          if (!isRoot) {
+              setIsOpen(recursiveCommand.type === 'expand');
+          }
+      }
+  }, [recursiveCommand, isRoot]);
+
+  // Update open state if expandMode prop changes (only if no active command interaction recently?)
+  // We bias towards prop updates for global "Expand All" buttons
+  useEffect(() => {
+    if (!internalCommand) {
+        setIsOpen(getInitialOpen());
+    }
+  }, [expandMode, data.type]);
+
   // Navigation
   const { register, unregister, syncTo } = useSync();
 
@@ -60,19 +80,24 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
       return () => unregister('diff', path);
   }, [path, register, unregister]);
 
-  // Update open state if expandMode prop changes
-  useEffect(() => {
-    setIsOpen(getInitialOpen());
-  }, [expandMode, data.type]);
+  // States for actions
+  const [isCopied, setIsCopied] = useState(false);
 
   const toggle = (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsOpen(!isOpen);
+    handleClick(e); // Also focus
   };
+
+  const handleClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (onFocusPath) onFocusPath(path);
+  }
 
   const handleSyncJump = (e: React.MouseEvent) => {
       e.stopPropagation();
       syncTo('editor', path);
+      if (onFocusPath) onFocusPath(path);
   };
 
   const generateCopyText = (val: any) => {
@@ -81,6 +106,22 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
           return JSON.stringify({ [data.key]: val }, null, 2);
       }
       return JSON.stringify(val, null, 2);
+  };
+
+  const handleCopy = (e: React.MouseEvent, val?: any) => {
+      e.stopPropagation();
+      const valueToCopy = val !== undefined ? val : (data.value !== undefined ? data.value : data.oldValue);
+      navigator.clipboard.writeText(generateCopyText(valueToCopy));
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  const handleToggleRecursive = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const nextType = internalCommand?.type === 'collapse' ? 'expand' : 'collapse';
+      setInternalCommand({ type: nextType, id: Date.now() + Math.random() });
+      setIsOpen(true);
+      handleClick(e);
   };
 
   const isExpandable = data.isObject || data.isArray;
@@ -94,6 +135,7 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
           <div 
              className={`${isRoot ? '' : 'ml-4'} border-l border-transparent hover:border-zinc-300 transition-colors rounded-sm my-0.5`}
              onDoubleClick={handleSyncJump}
+             onClick={handleClick}
              data-sync-id={`diff:${path}`}
           >
               {/* Old Value (Removed Style) */}
@@ -114,7 +156,10 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
                       <span>{JSON.stringify(data.oldValue)}</span>
                       {!isRoot && <span className="opacity-40 ml-0.5">,</span>}
                   </div>
-                  <CopyButton getValue={() => generateCopyText(data.oldValue)} />
+                  {/* Copy Action Inline */}
+                  <button onClick={(e) => handleCopy(e, data.oldValue)} className={`opacity-0 group-hover:opacity-100 transition-all p-1 rounded ml-auto mr-2 shrink-0 hover:bg-rose-300/50 text-rose-800`} title="Copy Original">
+                       <Copy size={12} />
+                  </button>
               </div>
 
               {/* New Value (Added Style) */}
@@ -135,7 +180,10 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
                       <span>{JSON.stringify(data.value)}</span>
                       {!isRoot && <span className="opacity-40 ml-0.5">,</span>}
                   </div>
-                  <CopyButton getValue={() => generateCopyText(data.value)} />
+                   {/* Copy Action Inline */}
+                   <button onClick={(e) => handleCopy(e, data.value)} className={`opacity-0 group-hover:opacity-100 transition-all p-1 rounded ml-auto mr-2 shrink-0 hover:bg-emerald-300/50 text-emerald-800`} title="Copy New">
+                       <Copy size={12} />
+                  </button>
               </div>
           </div>
       );
@@ -180,7 +228,7 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
       {/* The Line */}
       <div 
         className={`flex items-start group ${isExpandable ? 'cursor-pointer' : ''} py-0.5 rounded-sm px-1 -ml-1 ${lineClass} transition-colors relative pr-8`} 
-        onClick={isExpandable ? toggle : undefined}
+        onClick={isExpandable ? toggle : handleClick}
         onDoubleClick={handleSyncJump}
         data-diff-status={diffStatus}
       >
@@ -226,7 +274,26 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
           {!isRoot && <span className="opacity-40 select-none ml-0.5">,</span>}
         </div>
         
-        <CopyButton getValue={() => generateCopyText(data.value !== undefined ? data.value : data.oldValue)} />
+        {/* Unified Hover Action Menu (Similar to Editor) */}
+        <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-opacity ml-2 bg-white/90 backdrop-blur-sm rounded-sm z-20 shadow-sm border border-zinc-100">
+           <button 
+                onClick={(e) => handleCopy(e)} 
+                className={`p-1 hover:bg-zinc-200 text-zinc-600 rounded focus:outline-none focus:ring-2 focus:ring-black ${isCopied ? 'text-emerald-600 bg-emerald-50' : ''}`} 
+                title="Copy JSON"
+           >
+               {isCopied ? <Check size={12} /> : <Copy size={12} />}
+           </button>
+
+           {isExpandable && !isEmpty && (
+                <button 
+                  onClick={handleToggleRecursive}
+                  className={`p-1 hover:bg-zinc-200 text-zinc-600 rounded focus:outline-none focus:ring-2 focus:ring-black ${internalCommand?.type === 'collapse' ? 'bg-amber-100 text-amber-700' : ''}`}
+                  title={internalCommand?.type === 'collapse' ? "Expand Inner Recursive" : "Collapse Inner Recursive"}
+                >
+                    {internalCommand?.type === 'collapse' ? <UnfoldVertical size={12} /> : <FoldVertical size={12} />}
+                </button>
+           )}
+        </div>
 
       </div>
 
@@ -240,9 +307,11 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
                 expandMode={expandMode}
                 path={`${path}/${child.key}`}
                 parentIsArray={data.isArray}
+                onFocusPath={onFocusPath}
+                recursiveCommand={internalCommand}
             />
           ))}
-          <div className={`ml-4 pl-1 ${textClass} ${lineClass} rounded-sm w-fit px-1 -ml-1 bg-transparent hover:bg-transparent`}>
+          <div className={`ml-4 pl-1 ${textClass} rounded-sm w-fit px-1 -ml-1 bg-transparent hover:bg-transparent opacity-60 select-none`}>
             {data.isArray ? ']' : '}'}
           </div>
         </div>

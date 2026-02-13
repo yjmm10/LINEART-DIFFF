@@ -1,4 +1,5 @@
 
+
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
 type Language = 'en' | 'zh';
@@ -69,6 +70,7 @@ const translations = {
       copy: "Copy",
       copied: "Copied",
       format: "Format",
+      resolveRefs: "Resolve Refs",
       textMode: "TEXT",
       treeMode: "TREE",
       placeholder: "Paste JSON here...",
@@ -193,6 +195,7 @@ const translations = {
       copy: "复制",
       copied: "已复制",
       format: "格式化",
+      resolveRefs: "解析所有引用",
       textMode: "文本",
       treeMode: "树形",
       placeholder: "在此粘贴 JSON...",

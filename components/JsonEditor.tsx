@@ -1,11 +1,12 @@
 
+
 import React, { useState, useRef, useEffect, useContext, createContext, useCallback } from 'react';
 import { ChevronRight, ChevronDown, Plus, Trash2, X, FileType, ExternalLink, GripVertical, Copy, Check, FoldVertical, UnfoldVertical } from 'lucide-react';
 import { useSync } from './SyncContext';
 
 // --- Mutation Context (For Global Moves) ---
 interface JsonMutationContextType {
-    handleGlobalMove: (fromPath: string, toPath: string, position: 'before' | 'after' | 'inside', operation: 'move' | 'copy') => void;
+    handleGlobalMove: (fromPath: string, toPath: string, position: 'before' | 'after' | 'inside', operation: 'move' | 'copy', draggedValue?: any, fromZone?: string) => void;
 }
 
 const JsonMutationContext = createContext<JsonMutationContextType | null>(null);
@@ -105,7 +106,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   onDelete, 
   fieldKey, 
   onKeyChange, 
-  isRoot = false,
+  isRoot = false, 
   defaultOpen = true,
   path,
   index,
@@ -191,19 +192,55 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       if (onFocusPath) onFocusPath(currentPath);
   }
 
-  const handleKeyBlur = () => {
-    if (onKeyChange && localKey !== fieldKey) onKeyChange(localKey);
+  // KEY BLUR / SUBMIT
+  const commitKeyChange = () => {
+    if (onKeyChange && localKey !== fieldKey) {
+        onKeyChange(localKey);
+    }
+  };
+
+  const handleKeyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+          e.preventDefault();
+          commitKeyChange();
+          // Optional: Focus value input
+          if (valueInputRef.current) valueInputRef.current.focus();
+      }
+      if (e.key === 'Tab' && !e.shiftKey) {
+          // Allow default tab but also ensure value focus if adjacent
+      }
+  };
+
+  // VALUE BLUR / SUBMIT
+  const commitValueChange = () => {
+      let valString = String(localValue);
+      let parsed: any = valString;
+      
+      // Basic type inference for direct input
+      if (valString === 'true') parsed = true;
+      else if (valString === 'false') parsed = false;
+      else if (valString === 'null') parsed = null;
+      else if (!isNaN(Number(valString)) && valString.trim() !== '') parsed = Number(valString);
+      
+      // Only call onChange if different
+      if (parsed !== data) {
+          onChange(parsed);
+      }
   };
 
   const handleValueChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setLocalValue(val);
-    let parsed: any = val;
-    if (val === 'true') parsed = true;
-    else if (val === 'false') parsed = false;
-    else if (val === 'null') parsed = null;
-    else if (!isNaN(Number(val)) && val.trim() !== '') parsed = Number(val);
-    onChange(parsed);
+    setLocalValue(e.target.value);
+  };
+
+  const handleValueKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+          e.preventDefault();
+          commitValueChange();
+          e.currentTarget.blur();
+      }
+      if (e.key === 'Tab' && e.shiftKey) {
+          // Allow default shift tab
+      }
   };
 
   const handleChildChange = (key: string | number, newData: any) => {
@@ -299,57 +336,56 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   const handleToggleRecursive = (e: React.MouseEvent) => {
       e.stopPropagation();
       e.preventDefault();
-      
-      // Determine next state
       const nextType = internalCommand?.type === 'collapse' ? 'expand' : 'collapse';
-      
-      // Update local command to propagate to children.
-      // Use random ID to ensure it is always seen as "new" by children, even if triggered rapidly.
       setInternalCommand({ type: nextType, id: Date.now() + Math.random() });
-      
-      // Ensure the node itself is open so the recursive action on children is visible/effective.
-      // If the user is asking to recursively toggle, they almost certainly want to see the result.
       setIsOpen(true);
+      // Ensure we set focus so the path updates
+      if (onFocusPath) onFocusPath(currentPath);
   };
 
   const handleChevronToggle = (e: React.MouseEvent) => {
       e.stopPropagation();
       setIsOpen(!isOpen);
-      // Standard toggle does not affect internalCommand (recursive state)
-  };
-
-  // --- Keyboard Navigation (Tab Handling) ---
-
-  const handleKeyInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Tab' && !e.shiftKey) {
-          e.preventDefault();
-          if (valueInputRef.current) valueInputRef.current.focus();
-      }
-  };
-
-  const handleValueInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Tab' && e.shiftKey) {
-          e.preventDefault();
-          if (keyInputRef.current) keyInputRef.current.focus();
-      }
+      if (onFocusPath) onFocusPath(currentPath);
   };
 
   // --- Global Move Logic (Root Only) ---
   
-  const performGlobalMove = useCallback((fromPath: string, toPath: string, position: 'before' | 'after' | 'inside', operation: 'move' | 'copy' = 'move') => {
+  const performGlobalMove = useCallback((
+      fromPath: string, 
+      toPath: string, 
+      position: 'before' | 'after' | 'inside', 
+      operation: 'move' | 'copy' = 'move', 
+      draggedValue?: any, 
+      fromZone?: string
+  ) => {
       const newData = JSON.parse(JSON.stringify(data));
-      const { parent: fromParent, key: fromKey } = getParentAndKey(newData, fromPath);
-      if (!fromParent) return;
-
-      const isArray = Array.isArray(fromParent);
-      const val = isArray ? fromParent[Number(fromKey)] : fromParent[fromKey];
       
-      if (operation === 'move') {
-        if (isArray) fromParent.splice(Number(fromKey), 1);
-        else delete fromParent[fromKey];
+      // Determine Source & Value
+      let val = draggedValue;
+      let isCrossZone = fromZone && fromZone !== syncZone;
+      
+      const { parent: fromParent, key: fromKey } = getParentAndKey(newData, fromPath);
+      // Helper to check if source path is valid in THIS tree
+      const isValidSource = fromParent && fromKey !== null && (Array.isArray(fromParent) ? fromParent[Number(fromKey)] !== undefined : Object.prototype.hasOwnProperty.call(fromParent, fromKey));
+
+      // If internal D&D and value not passed (legacy/internal), fetch from tree
+      if (val === undefined && !isCrossZone && isValidSource) {
+          val = Array.isArray(fromParent) ? fromParent[Number(fromKey)] : fromParent[fromKey];
+      }
+      
+      // If we still don't have a value, we can't proceed (prevent null/undefined insertion)
+      if (val === undefined) return;
+
+      // Handle Delete (Move Operation)
+      // Only delete if it's a move AND it's within the same zone/tree
+      if (operation === 'move' && !isCrossZone && isValidSource) {
+           if (Array.isArray(fromParent)) fromParent.splice(Number(fromKey), 1);
+           else delete fromParent[fromKey];
       }
 
-      if (toPath.startsWith(fromPath + '/')) return;
+      // Check drops inside self
+      if (toPath.startsWith(fromPath + '/') && !isCrossZone) return; 
 
       let targetParent, targetKey;
       if (position === 'inside') {
@@ -362,6 +398,7 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
           if (!targetParent) return;
       }
 
+      // Insert Value
       if (Array.isArray(targetParent)) {
           if (position === 'inside') {
               targetParent.push(val);
@@ -371,34 +408,44 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
               targetParent.splice(idx, 0, val);
           }
       } else {
+          // Object Logic with Rename
+          const originalKey = getPathParts(fromPath).pop() || 'key';
+          
           if (position === 'inside') {
+              let k = originalKey;
               let i = 1;
-              let k = `moved_key_${i}`;
-              const originalKey = getPathParts(fromPath).pop() || 'key';
-              if (!targetParent[originalKey]) k = originalKey;
-              else { while (targetParent[k]) { i++; k = `moved_key_${i}`; } }
+              while (Object.prototype.hasOwnProperty.call(targetParent, k)) {
+                  k = `${originalKey}_${i}`;
+                  i++;
+              }
               targetParent[k] = val;
           } else {
+              // Reorder / Insert Sibling
               const entries = Object.entries(targetParent);
               const newEntries: [string, any][] = [];
-              const insertKey = getPathParts(fromPath).pop() || 'moved_key';
-              let safeKey = insertKey;
+              
+              let safeKey = originalKey;
               let c = 1;
-              while (Object.prototype.hasOwnProperty.call(targetParent, safeKey) && (operation === 'copy' || safeKey !== targetKey)) { 
-                  if (operation === 'move' && fromParent === targetParent && safeKey === fromKey) break; 
-                  safeKey = `${insertKey}_${c++}`;
+              
+              // Simple collision check: if key exists in target, rename it
+              // Note: If we 'moved' (deleted) it from the same parent, it won't be in targetParent properties anymore, so no collision.
+              while (Object.prototype.hasOwnProperty.call(targetParent, safeKey)) {
+                  safeKey = `${originalKey}_${c++}`;
               }
+              
               entries.forEach(([k, v]) => {
                   if (k === targetKey && position === 'before') newEntries.push([safeKey, val]);
                   newEntries.push([k, v]);
                   if (k === targetKey && position === 'after') newEntries.push([safeKey, val]);
               });
+              
+              // Clear and rebuild
               for (const k in targetParent) delete targetParent[k];
               newEntries.forEach(([k, v]) => targetParent[k] = v);
           }
       }
       onChange(newData);
-  }, [data, onChange]);
+  }, [data, onChange, syncZone]);
 
   // --- DnD Event Handlers ---
 
@@ -406,6 +453,8 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       e.stopPropagation();
       setIsDragging(true);
       e.dataTransfer.setData('lineart/path', currentPath);
+      e.dataTransfer.setData('lineart/json', JSON.stringify(localValue));
+      e.dataTransfer.setData('lineart/zone', syncZone);
       e.dataTransfer.effectAllowed = 'copyMove';
       const preview = document.createElement('div');
       preview.innerText = `{ ${localKey || 'Item'} }`;
@@ -450,10 +499,24 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   const handleDrop = (e: React.DragEvent) => {
       e.preventDefault(); e.stopPropagation();
       const fromPath = e.dataTransfer.getData('lineart/path');
+      const draggedJson = e.dataTransfer.getData('lineart/json');
+      const fromZone = e.dataTransfer.getData('lineart/zone');
+      
       if (!fromPath || fromPath === currentPath) return; 
-      const operation = e.altKey ? 'copy' : 'move';
-      if (isRoot) performGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState, operation);
-      else if (mutationContext) mutationContext.handleGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState, operation);
+      
+      let draggedValue = undefined;
+      try {
+          if (draggedJson) draggedValue = JSON.parse(draggedJson);
+      } catch (e) { console.error("Failed to parse dragged JSON", e); }
+
+      // Force 'copy' if crossing zones (since we can't easily delete from the source editor)
+      let operation: 'copy' | 'move' = e.altKey ? 'copy' : 'move';
+      if (fromZone && fromZone !== syncZone) {
+          operation = 'copy';
+      }
+
+      if (isRoot) performGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState, operation, draggedValue, fromZone);
+      else if (mutationContext) mutationContext.handleGlobalMove(fromPath, currentPath, dropState === 'none' ? 'inside' : dropState, operation, draggedValue, fromZone);
       setDropState('none'); setIsCopyMode(false);
   };
 
@@ -505,10 +568,9 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                style={{ width: `${Math.max(localKey.length, 4)}ch` }}
                value={localKey}
                onChange={(e) => setLocalKey(e.target.value)}
-               onKeyDown={handleKeyInputKeyDown}
-               onBlur={handleKeyBlur}
+               onKeyDown={handleKeyKeyDown}
+               onBlur={commitKeyChange}
                spellCheck={false}
-               onDoubleClick={(e) => e.stopPropagation()} 
              />
              <span className="text-zinc-400 cursor-pointer hover:text-accent hover:font-bold transition-colors px-0.5 select-none" onClick={(e) => { e.stopPropagation(); syncTo(syncTarget, currentPath); }} title="Reveal in Sync Target">:</span>
           </div>
@@ -532,19 +594,19 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
                 ref={valueInputRef}
                 className={`bg-transparent border-b border-zinc-200 focus:border-accent focus:bg-white focus:outline-none w-full min-w-[100px] font-medium
                   ${type === 'string' ? 'text-emerald-700' : type === 'number' ? 'text-orange-600' : type === 'boolean' ? 'text-blue-600' : 'text-purple-600'}`}
-                value={localValue === null ? 'null' : localValue.toString()}
+                value={localValue === null || localValue === undefined ? 'null' : localValue.toString()}
                 onChange={handleValueChange}
-                onKeyDown={handleValueInputKeyDown}
+                onKeyDown={handleValueKeyDown}
+                onBlur={commitValueChange}
                 spellCheck={false}
-                onDoubleClick={(e) => e.stopPropagation()}
-                title={localValue === null ? 'null' : localValue.toString()}
+                title={localValue === null || localValue === undefined ? 'null' : localValue.toString()}
               />
               {isRef && <button onClick={(e) => { e.stopPropagation(); syncTo(syncZone, localValue); }} className="ml-2 text-zinc-400 hover:text-accent p-0.5 hover:bg-blue-50 rounded transition-colors" title="Jump to definition"><ExternalLink size={12} /></button>}
           </div>
         )}
 
         {/* Actions Menu */}
-        <div className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 flex items-center gap-1 transition-opacity ml-2 bg-white/80 backdrop-blur-sm rounded-sm z-20">
+        <div className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 flex items-center gap-1 transition-opacity ml-2 bg-white/80 backdrop-blur-sm rounded-sm z-20 shadow-sm border border-zinc-100">
            <button onClick={handleCopy} className={`p-1 hover:bg-zinc-200 text-zinc-600 rounded focus:outline-none focus:ring-2 focus:ring-black ${isCopied ? 'text-emerald-600 bg-emerald-50' : ''}`} title="Copy JSON">
                {isCopied ? <Check size={14} /> : <Copy size={14} />}
            </button>
