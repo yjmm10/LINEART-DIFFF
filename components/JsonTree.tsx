@@ -102,8 +102,18 @@ const JsonTree: React.FC<JsonTreeProps> = React.memo(({
 
   const generateCopyText = (val: any) => {
       // If we are a property of an object (not array item) and not root, wrap with key
+      // We also want to strip the outer braces to copy as "key": "value"
       if (!isRoot && !parentIsArray) {
-          return JSON.stringify({ [data.key]: val }, null, 2);
+          const wrapper = { [data.key]: val };
+          const json = JSON.stringify(wrapper, null, 2);
+          const lines = json.split('\n');
+          if (lines.length >= 3) {
+             return lines.slice(1, -1)
+                .map(line => line.startsWith('  ') ? line.substring(2) : line)
+                .join('\n');
+          } else {
+             return json.trim().replace(/^{/, '').replace(/}$/, '').trim();
+          }
       }
       return JSON.stringify(val, null, 2);
   };

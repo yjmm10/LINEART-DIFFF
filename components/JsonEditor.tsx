@@ -1,7 +1,7 @@
 
 
 import React, { useState, useRef, useEffect, useContext, createContext, useCallback } from 'react';
-import { ChevronRight, ChevronDown, Plus, Trash2, X, FileType, ExternalLink, GripVertical, Copy, Check, FoldVertical, UnfoldVertical } from 'lucide-react';
+import { ChevronRight, ChevronDown, Plus, Trash2, X, FileType, ExternalLink, GripVertical, Copy, Check, FoldVertical, UnfoldVertical, ClipboardPaste } from 'lucide-react';
 import { useSync } from './SyncContext';
 
 // --- Mutation Context (For Global Moves) ---
@@ -280,12 +280,25 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
   const handleAddChild = (dataType: string) => {
     const newValue = getInitialValue(dataType);
     if (type === 'array') {
-      onChange([...data, newValue]);
+      // PREPEND: Add to the beginning of the array
+      onChange([newValue, ...data]);
     } else if (type === 'object') {
-      const newObj = { ...data };
+      // PREPEND: Create a new object with the new key first to preserve order in modern JS engines
+      const newObj: Record<string, any> = {};
+      
+      // Generate a unique key
       let i = 1;
-      while (newObj[`new_key_${i}`]) i++;
-      newObj[`new_key_${i}`] = newValue;
+      while (Object.prototype.hasOwnProperty.call(data, `new_key_${i}`)) i++;
+      const newKey = `new_key_${i}`;
+      
+      // 1. Insert new key first
+      newObj[newKey] = newValue;
+      
+      // 2. Append existing keys
+      Object.keys(data).forEach(k => {
+          newObj[k] = data[k];
+      });
+      
       onChange(newObj);
     }
     setIsOpen(true); 
@@ -331,6 +344,103 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
       navigator.clipboard.writeText(textToCopy);
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  const handlePaste = async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      
+      const processPastedText = (text: string) => {
+          if (!text.trim()) return;
+
+          let parsed;
+          try {
+              parsed = JSON.parse(text);
+          } catch {
+              // Try wrapping in braces to support "key": "value" format
+              try {
+                 parsed = JSON.parse(`{${text}}`);
+              } catch {
+                 // Try fixing unquoted keys: { key: "val" } -> { "key": "val" } (Basic fallback)
+                 try {
+                     const fixed = text.replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:) /g, '$1"$2"$3');
+                     parsed = JSON.parse(fixed);
+                 } catch {
+                     try {
+                         // Try fixing unquoted keys wrapped
+                         const fixedWrapped = `{${text}}`.replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:) /g, '$1"$2"$3');
+                         parsed = JSON.parse(fixedWrapped);
+                     } catch {
+                         // Finally treat as string
+                         parsed = text;
+                     }
+                 }
+              }
+          }
+
+          if (type === 'array') {
+              // Prepend
+              onChange([parsed, ...data]);
+              setIsOpen(true);
+          } else if (type === 'object') {
+              const newObj: Record<string, any> = {};
+
+              // Strategy:
+              // 1. If parsed is Object: Flatten it and insert keys at top.
+              // 2. If parsed is Primitive/Array: Insert as single key at top.
+
+              if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                  // It's a dictionary. Insert its keys first.
+                  
+                  // 1. Add Pasted Keys
+                  Object.keys(parsed).forEach(k => {
+                      if (!Object.prototype.hasOwnProperty.call(data, k)) {
+                          newObj[k] = parsed[k];
+                      }
+                  });
+                  
+                  // 2. Add Existing Keys (maintain their values and relative order)
+                  Object.keys(data).forEach(k => {
+                      newObj[k] = data[k];
+                  });
+              } else {
+                  // It is a value. Generate one key.
+                  let i = 1;
+                  while (Object.prototype.hasOwnProperty.call(data, `pasted_key_${i}`)) i++;
+                  const newKey = `pasted_key_${i}`;
+                  
+                  newObj[newKey] = parsed;
+                  
+                  Object.keys(data).forEach(k => {
+                      newObj[k] = data[k];
+                  });
+              }
+              onChange(newObj);
+              setIsOpen(true);
+          }
+      };
+
+      const useFallback = () => {
+         // Fallback for environments where Clipboard API is blocked or permission denied
+         // We use window.prompt because it's the simplest way to get input without a complex UI change,
+         // effectively bypassing the clipboard read permission check.
+         const text = window.prompt("Paste JSON here:");
+         if (text) processPastedText(text);
+      }
+
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+          useFallback();
+          return;
+      }
+
+      try {
+          // Explicitly try to read. Browsers might throw or reject here if denied.
+          const text = await navigator.clipboard.readText();
+          processPastedText(text);
+      } catch (err) {
+          // Log warning for developer debugging, but handle gracefully for user
+          console.warn("Clipboard API access denied or failed. Using fallback.", err);
+          useFallback();
+      }
   };
 
   const handleToggleRecursive = (e: React.MouseEvent) => {
@@ -613,6 +723,10 @@ export const JsonEditor: React.FC<JsonEditorProps> = ({
 
            {isContainer && (
              <div className="relative flex gap-1">
+                <button onClick={handlePaste} className="p-1 hover:bg-zinc-200 text-zinc-600 rounded focus:outline-none focus:ring-2 focus:ring-black" title="Paste JSON (Insert at Top)">
+                    <ClipboardPaste size={14} />
+                </button>
+
                 <button 
                   onClick={handleToggleRecursive}
                   className={`p-1 hover:bg-zinc-200 text-zinc-600 rounded focus:outline-none focus:ring-2 focus:ring-black ${internalCommand?.type === 'collapse' ? 'bg-amber-100 text-amber-700' : ''}`}
